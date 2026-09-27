@@ -29,3 +29,4 @@ memory_tickets/
 .env.*
 *.pem
 *.key
+docs/DIFF_PLAN.md
