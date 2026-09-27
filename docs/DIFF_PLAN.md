@@ -3,7 +3,7 @@
 **基准**：现有公开仓工作副本（15 个文件：`README.md`、`.gitattributes`、
 `skills/pulse-path/{SKILL.md,references/classification_rules.md,scripts/scan_links.py}`、
 `skills/memory-pointer-system/{SKILL.md,scripts/*9 文件}`）。
-**目标**：`E:\Hermes-win\opensource\pulse-path\`（staging 超集，23+ 文件）。
+**目标**：本 staging 超集仓库 `<STAGING>/pulse-path/`（32 个受版本控制文件）。
 **原则**：只增不删知识资产；删的是**受限信息**（隐私/保密/内部口径），保留的是**方法**。
 
 ---
@@ -13,16 +13,16 @@
 | # | 文件 | 违规点（类型） | 处置档 |
 |---|---|---|---|
 | 1 | `README.md` L12 | 项目/赛事名（G3） | 删 |
-| 2 | `README.md` L56-57 | 赛事名 + 项目代号 + 内部数字（`98%→56%`）+ 成果描述（G3） | 改写为匿名量级 |
-| 3 | `README.md` L61 | 署名与规范不一致（`Inspired-atm`，非 G2/G3 但属元数据违规） | 改为 `Inspired-by-Atmosphere` |
+| 2 | `README.md` L56-57 | 赛事名 + 项目代号 + 内部成绩数字 + 成果描述（G3） | 改写为匿名量级表述 |
+| 3 | `README.md` L61 | 作者署名用了非规范缩略形式（元数据违规，非 G2/G3） | 统一为规范署名 |
 | 4 | `README.md` 全文 | 无英文主 README、无配置表、无局限、无 LICENSE 引用（G4 可用性） | 重写 + 新增 zh-CN |
-| 5 | `skills/pulse-path/SKILL.md` L8/L64-69 | 项目名 + 内部数字（`98%→56%`、`24→16`、`26 条`、`96.2% 假数字`、`T7 采购`、`学案机`）（G3） | 整节改匿名化 |
-| 6 | `skills/pulse-path/SKILL.md` L71-81 | 内部整理模板含 SSOT 口径数字（`69.42→63%±6`、`215Hz→249Hz`、`8.6K`）+ 内部目录名（员工工作区/微云/学案）+ 真实密钥提示（G3/G2） | 保留 8 步方法，删全部数字与内部目录名 |
-| 7 | `skills/pulse-path/SKILL.md` L24 | 本机绝对路径示例（`C:\...\sleep-edfx`）（G4） | 改为 `<DATA_DIR>/dataset` |
+| 5 | `skills/pulse-path/SKILL.md` L8/L64-69 | 项目代号 + 一组内部实测数字与采购条目（G3） | 整节改匿名化：只留方法，删全部数字 |
+| 6 | `skills/pulse-path/SKILL.md` L71-81 | 内部整理模板含 6 处口径数字（成绩/频率/规模）+ 3 个内部目录名 + 一句"某处存着真实密钥"的提示（G3/G2） | 保留 8 步方法，删全部数字与内部目录名 |
+| 7 | `skills/pulse-path/SKILL.md` L24 | 本机绝对路径示例（`<DATA_DIR>\<dataset>`）（G4） | 改为 `<DATA_DIR>/dataset` |
 | 8 | `skills/pulse-path/SKILL.md` L93 | 本机实测字符数（G3 弱） | 改为定性描述 |
 | 9 | `skills/pulse-path/scripts/scan_links.py` L31-34 | 两处本机绝对路径常量（G2/G4） | 改环境变量 + 可移植默认 |
 | 10 | `skills/memory-pointer-system/SKILL.md` L42/L58/L64/L68/L117 | 5 处本机绝对路径（G2/G4） | 改 `$HERMES_HOME` / 仓库内相对路径 |
-| 11 | `skills/memory-pointer-system/SKILL.md` L60-75 | 私有 Gitee 库地址 + 账号路径 + 本机三副本路径（G2/G3） | 改为通用三副本描述 |
+| 11 | `skills/memory-pointer-system/SKILL.md` L60-75 | 私有托管平台地址 + 账号路径 + 本机三副本路径（G2/G3） | 改为通用三副本描述 |
 | 12 | `skills/memory-pointer-system/SKILL.md` L73/L90/L92/L123/L161-164/L177 | 调度任务 ID ×6（本机实例标识）（G3 弱） | 删除或改描述性说法 |
 | 13 | `skills/memory-pointer-system/SKILL.md` L84-146 | 内部项目名/竞赛名/内部文档名/内部硬件档案/本机 GPU 型号/内部数字（`99%→61%`、`99%→85%`、`30→34`）（G3） | 保留判据与坑位，删全部标识与数字 |
 | 14 | `skills/memory-pointer-system/SKILL.md` L156/L164 | 私有技术库路径 + 内部库名 + 另一私有仓的同步脚本（G2/G3） | 改为通用"开发区/验证区/归档区" |
@@ -41,7 +41,7 @@
 | 27 | 全仓 | 无 `LICENSE`/`.gitignore`/`requirements.txt`/`docs/SANITIZE_LOG.md`/`CHANGELOG.md`/`scripts/check_secrets.py`/`examples/`（规范 §3 结构缺失） | 新增 |
 | 28 | 全仓 | 提交了 `__pycache__/mem_guard.cpython-311.pyc`（二进制产物入库） | 删除 + `.gitignore` |
 
-**未发现**（S1 零命中）：真实姓名（审计中共 4 处，均为"成员"泛指而非真名）、凭据/私钥/令牌、
+**未发现**（S1 零命中）：真实姓名（相近表述均为"参与者"泛指，无真名）、凭据/私钥/令牌、
 邮箱、内网 IP、MAC、主机名、学号。**唯一出现的"姓名型"信息是用户名出现在路径里**，已随路径一并处理。
 
 ---
@@ -92,8 +92,8 @@
 
 | 段落（原位置） | 删除/改写 | 理由 |
 |---|---|---|
-| `README.md` 实战案例整节 | 改写为"由长期多成员项目实战沉淀" | 含赛事名/项目代号/内部数字（G3） |
-| `pulse-path/SKILL.md` "实战实例（国创项目）" | 改写为"实战实例（匿名化）" | 项目名 + 内部数字 + 具体数据集名（G3） |
+| `README.md` 实战案例整节 | 改写为"由长期多协作者项目实战沉淀" | 含赛事名/项目代号/内部数字（G3） |
+| `pulse-path/SKILL.md` 实战实例整节 | 改写为"实战实例（匿名化）" | 项目代号 + 内部数字 + 具体数据集名（G3） |
 | `pulse-path/SKILL.md` 大整理模板 5/7/8 条 | 删具体口径数字与内部目录名，保留"抽一张替换表、全体共用" | 内部口径与数字（G3） |
 | `pulse-path/SKILL.md` "大项目启动=百分百启用（2026-08-11 用户要求）" | 改为"默认启用" | 去内部决策记录口吻 |
 | `memory-pointer-system/SKILL.md` 三副本同步渠道段 | 改写为通用"权威库/clone/使用副本"+ 同步脚本职责 + 同步坑 | 私有库地址 + 本机路径 + 调度 ID（G2/G3） |
@@ -115,7 +115,7 @@ broken-link-checker / Zettelkasten / OpenViking 等）；技术日期；所有�
 
 | 候选 | 现状 | 未纳入理由 |
 |---|---|---|
-| `jieyuan-system` 技能（阶元系统，含 7 references + 4 脚本） | 只在 Hermes 侧 | 内容含本机系统自省记录、内部角色设计、运行调查实录，**并非记忆链通用方法**；脱敏成本高、通用价值低。若要做，需单独立项重写 |
+| 另一内部技能（"系统自省/元系统"类，含 7 references + 4 脚本） | 只在 Hermes 侧 | 内容含本机系统自省记录、内部角色设计、运行调查实录，**并非记忆链通用方法**；脱敏成本高、通用价值低。若要做，需单独立项重写 |
 | `governance-approval` 插件（`plugin.yaml` + `__init__.py`，author 标为自定义治理） | 只在 Hermes 插件目录 | 与记忆链只有"可选审批接缝"关系；本仓已用 `GOVERNANCE_MODULE_DIR` 留出通用接缝，不需要把该插件随仓发布 |
 | `memory-pointer-system/SKILL.md` 中"记忆分层审计法"整节 | 已保留并通用化 | 若用户认为过于偏工具细节，可再砍 |
 
@@ -132,6 +132,6 @@ broken-link-checker / Zettelkasten / OpenViking 等）；技术日期；所有�
 ## 6 交付边界
 
 - 只建本地提交，**未 push、未建远程**。
-- `C:\Users\Lenovo\Documents\pulse-path`（三副本同步的 clone 端）**一字未改**；
+- 上游工作副本（三副本同步的 clone 端，位于本机文档目录）**一字未改**；
   Hermes 技能目录亦未改动。
 - 本仓是**超集**：现有公开仓的每个知识资产都能在新仓找到对应物（见 §2/§3 逐条映射）。

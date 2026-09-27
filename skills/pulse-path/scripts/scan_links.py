@@ -64,7 +64,8 @@ USAGE = """scan_links — 链路体检：知识链完整性的三级检查
 """
 TEXT_EXTS = (".md", ".py", ".txt", ".yaml", ".yml")
 
-# 盘符路径：C:\xxx 或 C:/xxx（排除转义上下文；允许空格与中文标点，尾部文本靠截断验证消解）
+# 盘符路径：Windows 绝对路径（盘符 + 分隔符 + 目录段）。排除转义上下文；
+# 允许空格与中文标点，尾部粘连文本靠截断验证消解。
 PATH_RE = re.compile(r"(?<![A-Za-z0-9_\\])([A-Za-z]:[\\/][^`\"'()<>|*?\n\r]+)")
 
 PLACEHOLDER_MARKERS = ("(", "${", "…", "...", "xxx", "your", "path/to", "example")
@@ -118,8 +119,8 @@ def build_skill_index():
 
 def path_exists_fuzzy(ref):
     """路径存在性（模糊）：完整存在即真；否则逐级截断尾部段验证——
-    处理「路径 + 附加文本」（如 `C:\\...\\foo，端口`、`C:\\Program Files` 截断）。
-    最小保留 2 级（盘符 + 一个目录），防 C:\\ 通配放行。"""
+    处理「路径 + 附加文本」（如绝对路径后紧跟中文逗号、或路径中途断在目录名上）。
+    最小保留 2 级（盘符 + 一个目录），防只剩根盘符就通配放行。"""
     if os.path.exists(ref):
         return True
     parts = ref.replace("/", os.sep).split(os.sep)

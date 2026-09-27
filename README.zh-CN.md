@@ -7,7 +7,7 @@
 
 ## 这是什么 / What this is
 
-大型项目（多成员 / 多文档 / 多技能 / 长期演进）的知识资产很容易被改动**打散联系**：
+大型项目（多协作者 / 多文档 / 多技能 / 长期演进）的知识资产很容易被改动**打散联系**：
 删掉一个文件、改一条路径，引用它的文档悄悄"断线"，下次顺着找才发现。
 
 本技能把知识/记忆组织成**链表**：每条记忆是节点，"详见/指向/引用"是指针，
@@ -53,7 +53,7 @@ pulse-path/
 
 三个技能都是可直接放入 agent 的技能目录（Claude Code `.claude/skills/`、Hermes `skills/`，
 或任何读取带 YAML front matter 的 `SKILL.md` 的加载器）。三者可独立使用——
-多数团队只需要 `pulse-path` + `scan_links.py`。
+多数使用者只需要 `pulse-path` + `scan_links.py`。
 
 ## 快速上手 / Quick start
 
@@ -120,12 +120,12 @@ api       = cfg://SERVICE_API_KEY | 取值见 .env，勿写入记忆正文
 - **不是数据库**：指针字典就是纯 markdown 文件，并发控制交给宿主 agent 的记忆工具，不属本仓职责。
 - **水位百分比取决于你配置的 `limit`**（`mem_rules.json`）：宿主上调记忆字符上限后要同步改规则表，
   否则百分比失真（上一版就因未同步导致自带测试 1/25 失败）。
-- **Windows / git-bash 提示**：脚本用 `python` 跑，路径请传原生形式（`C:/...`）而非 MSYS 形式
+- **Windows / git-bash 提示**：脚本用 `python` 跑，路径请传原生形式（`<盘符>:/路径/script.py`）而非 MSYS 形式
   （`/c/...`）——MSYS 路径转换通常是关闭的。
 
 ## 出处 / Provenance
 
-由长期、多成员项目的实战沉淀而来。其中的姓名、组织、路径与内部数字均已移除——
+由长期、多协作者项目的实战沉淀而来。其中的身份、组织、路径与内部数字均已移除——
 见 `docs/SANITIZE_LOG.md`；相对上一版公开修订的变化见 `docs/DIFF_PLAN.md`。
 
 ## 许可 / License

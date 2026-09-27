@@ -388,7 +388,7 @@ def main():
 
     save_tickets(rules, tickets)
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
-    lines = [f"# 记忆管理员 curator 报告 {now}", f"模式: {'COMMIT（已写入）' if args.commit else 'DRY-RUN（只分析）'}", ""]
+    lines = [f"# 记忆管理员 curator 报告 {now}", f"模式: {'COMMIT（提交模式，逐条结果见下）' if args.commit else 'DRY-RUN（只分析）'}", ""]
     for t, status, detail in results:
         lines.append(f"- [{status}] {t['type']} | {t['content'][:30]} → {detail}")
     if not results:

@@ -130,7 +130,7 @@ api       = cfg://SERVICE_API_KEY | 取值见 .env，勿写入记忆正文
 - **Watermark check compares against the `limit`s you configure** (`mem_rules.json`). If your host
   raises its memory character limit, update the rule table, or the percentage will be wrong.
   (A previous revision shipped a stale limit and its own test suite consequently failed 1/25.)
-- **Windows / git-bash note:** run the scripts with `python`, and pass native paths (`C:/...`)
+- **Windows / git-bash note:** run the scripts with `python`, and pass native paths (`<DRIVE>:/path/to/script.py`)
   rather than MSYS paths (`/c/...`) — MSYS path translation is commonly disabled.
 
 ## Provenance

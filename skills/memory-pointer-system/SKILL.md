@@ -34,8 +34,8 @@ key = scheme://target | 摘要
 | 级 | 类型 | 摘要策略 | 例 |
 |---|---|---|---|
 | **S 级** | 红线/铁律 | 摘要=完整语义，指针可省 | `respect = rule://respect-people \| 尊重人底线…` |
-| **A 级** | 高频配置 | 摘要=关键值 | `net_proxy = cfg://proxy \| 127.0.0.1:7897` |
-| **B 级** | 低频大内容 | 摘要=一句话定位 | `dsh = skill://deepseek-harness \| DeepSeek Harness底座…` |
+| **A 级** | 高频配置 | 摘要=关键值 | `net_proxy = cfg://proxy \| 代理 host:port` |
+| **B 级** | 低频大内容 | 摘要=一句话定位 | `nav = skill://project-navigator \| 项目导航技能…` |
 
 ## mem_guard 保卫系统
 
@@ -75,7 +75,7 @@ mem_guard 抓到过**自己手写的断链**：`cfg://X` 在 .env 里不存在�
 1. `git pull --rebase` **必须先 commit**：工作区有未提交变更会直接拒绝（cannot pull with rebase: You have unstaged changes）
 2. `--local-only` 遗留变更识别：不能只比两版文件 diff（已一致），要用 `git status --porcelain` 查未提交变更
 3. Windows `core.autocrlf=true` 会把仓库文件变 CRLF（脚本出现 CRLF vs LF 全文件假 diff）——**`.gitattributes` 写 `*.md text eol=lf` + `*.py text eol=lf` 根治**
-4. git-bash 调 python 脚本：用 `python "C:/…/script.py"`（MSYS `~/` 不展开，会报 can't open file 'C:\c\Users\…'）。同理给脚本传环境变量时要用原生绝对路径（`C:/…`），MSYS 风格的 `/c/…` 不会被自动转换
+4. git-bash 调 python 脚本：路径用原生绝对形式（`python "<盘符>:/…/script.py"`）；MSYS 的 `~/` 不展开、`/<盘符>/…` 风格路径不会被自动转换，两者都会报 can't open file。给脚本传环境变量同理——用原生绝对路径
 
 ## 批量指针化迁移（叙述条目 → 指针）
 

@@ -78,7 +78,11 @@ def main():
         print(f"memory file not found: {mem}\n"
               f"set HERMES_HOME, or pass the path as the first argument (see --help)")
         return 0
-    txt = io.open(mem, encoding="utf-8").read()
+    try:
+        txt = io.open(mem, encoding="utf-8", errors="replace").read()
+    except OSError as e:
+        print(f"cannot read {mem}: {e}")
+        return 0
     for s in [x.strip() for x in txt.split("\u00a7") if x.strip()]:
         m = PAT.match(s)
         if not m:

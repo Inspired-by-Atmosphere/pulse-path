@@ -54,11 +54,11 @@ def setup_sandbox():
 
 def test_parse():
     print("\n== ① parse ==")
-    txt = "key1 = skill://deepseek-harness | 摘要\nkey2 = doc://path/to/x.md | 摘要2\n"
+    txt = "key1 = skill://demo-skill | 摘要\nkey2 = doc://path/to/x.md | 摘要2\n"
     pointers, mangled, others = mg.parse_pointers(txt)
     check("解析 2 条指针", len(pointers) == 2 and len(mangled) == 0)
     check("key1 scheme 正确", pointers[0]["scheme"] == "skill")
-    check("key1 target 正确", pointers[0]["target"] == "deepseek-harness")
+    check("key1 target 正确", pointers[0]["target"] == "demo-skill")
     check("摘要剥离", "摘要" in pointers[0]["summary"])
     txt2 = "Hermes venv=...hermes-agent\\venv（uv无pip）\n"
     p2, m2, o2 = mg.parse_pointers(txt2)
@@ -97,7 +97,7 @@ def test_autofix():
 
 def test_mangled():
     print("\n== ④ 损坏检测 ==")
-    txt = "dsh = DeepSeek Harness底座 | 部署细节见技能\n"
+    txt = "dsh = 内部工具底座 | 部署细节见技能\n"
     p, m, o = mg.parse_pointers(txt)
     check("疑似损坏行被识别", len(m) == 1)
     txt2 = "Hermes venv=...hermes-agent\\venv（uv无pip）\n"

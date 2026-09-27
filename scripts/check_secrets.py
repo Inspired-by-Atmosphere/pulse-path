@@ -14,7 +14,7 @@ check_secrets.py — 零依赖敏感信息扫描器（开源仓库发布前门�
     3. 邮件地址          非 noreply 的真实邮箱
     4. 内网地址          10./172.16-31./192.168./127. 的 IPv4、裸 MAC
     5. 高熵字符串        长度 ≥ 24 且香农熵 ≥ 3.6 的连续字串（排除路径/URL/驼峰标识/重复字符）
-    6. 本机绝对路径      C:\\Users\\…、/c/Users/…、/Users/…、/home/<name>/…（G4 可用性）
+    6. 本机绝对路径      家目录 / 系统目录形式的绝对路径（G4 可用性；本行刻意不写字面模式）
 
 退出码: 0 = 零命中；1 = 有命中（列出文件:行:原因，值做掩码不原样打印）
 """
@@ -30,6 +30,7 @@ SKIP_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".pdf", ".zip", "
              ".tar", ".whl", ".pyc", ".so", ".dll", ".exe", ".mp3", ".mp4", ".woff",
              ".woff2", ".ttf", ".otf"}
 MAX_BYTES = 2 * 1024 * 1024  # 单文件超过 2MB 跳过（本仓不应有大文件）
+ALLOW_MARK = "secrets:allow"  # 行内豁免标记：该行是"描述模式"的文档/正则，不是真实泄漏
 
 # 占位符/示例值：命中这些说明是文档里的写法，不是真凭据
 PLACEHOLDERS = ("your", "xxx", "example", "placeholder", "<", "${", "$(", "env.",
@@ -83,15 +84,24 @@ def looks_placeholder(v):
 
 
 def high_entropy_hits(line):
+    """高熵串 = 真凭据的形状：随机 base64/base32 块。
+
+    判据收紧到"必须同时含 数字 + 大写 + 小写，且熵 ≥ 4.0，且不含路径/URL 字符"，
+    否则 HERMES_HOME、memory-pointer-system、dedup_same_category_only 这类
+    普通标识符会被大量误报（误报会让人忽略真正的命中）。
+    """
     out = []
     for m in B64_RE.finditer(line):
         tok = m.group(0)
-        if tok.count("/") > 2 or tok.count(".") > 2 or tok.count("-") > 4:
-            continue  # 路径/URL/长连字符标识
-        if tok.startswith(("http", "viking", "skill", "doc", "script", "cfg", "rule", "fact", "cron")):
+        if any(c in tok for c in "/\\.:@"):
+            continue                     # 路径 / URL / 带扩展名
+        if not (any(c.isdigit() for c in tok)
+                and any(c.isupper() for c in tok)
+                and any(c.islower() for c in tok)):
+            continue                     # 普通标识符（常量名/snake_case/slug）
+        if entropy(tok) < 4.0:           # 自然语言与命名标识符通常在 4.0 以下
             continue
-        if entropy(tok) >= 3.6 and len(tok) >= 24:
-            out.append(tok)
+        out.append(tok)
     return out
 
 
@@ -118,9 +128,13 @@ def iter_files(root):
 
 def scan_file(path, rel):
     hits = []
+    exempt = 0
     try:
         with open(path, "r", encoding="utf-8", errors="ignore") as fh:
             for i, line in enumerate(fh, 1):
+                if ALLOW_MARK in line:
+                    exempt += 1
+                    continue
                 if PEM_RE.search(line):
                     hits.append((rel, i, "PEM 私钥块"))
                 m = SSHKEY_RE.search(line)
@@ -148,7 +162,7 @@ def scan_file(path, rel):
                     hits.append((rel, i, "高熵串: " + mask(tok)))
     except (OSError, UnicodeDecodeError):
         pass
-    return hits
+    return hits, exempt
 
 
 # 扫描器自身/文档里说明正则的示例行豁免（形如 `# noqa: secrets` 或示例标注）
@@ -161,21 +175,25 @@ def main():
     root = os.path.abspath(args.root)
     all_hits = []
     scanned = 0
+    exempted = 0
     for p in iter_files(root):
         rel = os.path.relpath(p, root)
         scanned += 1
-        all_hits.extend(scan_file(p, rel))
+        hits, ex = scan_file(p, rel)
+        all_hits.extend(hits)
+        exempted += ex
 
     if not args.quiet:
         print(f"扫描: {root}")
         print(f"文件数: {scanned}")
+        print(f"按 `{ALLOW_MARK}` 标记豁免: {exempted} 行")
         print("-" * 60)
     for rel, ln, why in all_hits:
         print(f"{rel}:{ln}: {why}")
     if all_hits:
         print(f"\n❌ 命中 {len(all_hits)} 条（{scanned} 个文件）")
         return 1
-    print(f"\n✅ 零命中（{scanned} 个文件）")
+    print(f"\n✅ 零命中（{scanned} 个文件，豁免 {exempted} 行）")
     return 0
 
 
