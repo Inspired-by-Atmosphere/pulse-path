@@ -1,0 +1,178 @@
+{
+  "version": "1.0",
+  "_comment": "mem_guard 声明式规则表——新增 scheme/检测类型只改本文件，引擎零改动。规则字段：verify=验证器名(引擎内置)，autofix=自动修复器名列表(按序尝试)，report=分级策略(red_if_unfixable=可修则黄/不可修则红，red=直接红，pending=全量版验证暂不检)",
+  "schemes": {
+    "skill": {
+      "verify": "skill_dir",
+      "autofix": [
+        "case_fix",
+        "unique_approx"
+      ],
+      "report": "red_if_unfixable"
+    },
+    "doc": {
+      "verify": "path_exist",
+      "autofix": [
+        "sep_fix"
+      ],
+      "report": "red_if_unfixable"
+    },
+    "script": {
+      "verify": "scripts_dir",
+      "autofix": [],
+      "report": "red"
+    },
+    "cfg": {
+      "verify": "env_key",
+      "autofix": [],
+      "report": "red"
+    },
+    "env": {
+      "verify": "env_key",
+      "autofix": [],
+      "report": "red"
+    },
+    "viking": {
+      "verify": "viking_uri",
+      "autofix": [],
+      "report": "pending"
+    },
+    "fact": {
+      "verify": "fact_id",
+      "autofix": [],
+      "report": "pending"
+    },
+    "rule": {
+      "verify": "rule_doc",
+      "autofix": [],
+      "report": "pending"
+    },
+    "cron": {
+      "verify": "cron_id",
+      "autofix": [],
+      "report": "pending"
+    },
+    "mem": {
+      "verify": "mem_key",
+      "autofix": [],
+      "report": "pending"
+    }
+  },
+  "damage": {
+    "_comment": "疑似损坏行检测：试点期只识别'能确认曾是指针'的行（含 = 与 | 结构但缺合法 scheme://），避免误报旧格式条目",
+    "detect": [
+      "pointer_mangled",
+      "dup_key"
+    ],
+    "action": "red"
+  },
+  "content_scans": {
+    "_comment": "内容扫描（非指针行验证）：文档引用的 .py 与脚本实际存在处比对，找幽灵引用。目录必须由使用者自行配置（开源版不含任何默认路径）；enabled=true 后才纳入体检。扫描器 v2 已修正则（.py 后加负向前瞻，防 download.pytorch.org 误报）+ 全盘二次确认，避免把异地合法脚本误报成幽灵。",
+    "ghost_scripts": {
+      "_comment": "target=文档根；zone_dirs=执行区（缺失脚本算真幽灵，必须修）；plan_zone_dirs=规划区（缺失算待确认）；search_roots=脚本可能真实存在的所有根。相对路径按 target 解析，支持 ~ 与 $VAR。",
+      "target": "",
+      "zone_dirs": [],
+      "plan_zone_dirs": [],
+      "skip_dirs": [
+        "03_交付区",
+        "06_简报"
+      ],
+      "search_roots": [],
+      "enabled": false
+    }
+  },
+  "watermark": {
+    "_comment": "水位巡检：监控文件使用率 ≥threshold 时报告整理清单。limit=字符上限，须与你 agent 的 memory 字符上限对齐（上限调过就要同步改这里，否则水位百分比失真）。files=监控清单（名称/路径/上限）；路径支持 ~ 与 $VAR，相对路径按 HERMES_HOME 解析。",
+    "enabled": true,
+    "threshold": 80,
+    "limit": 12000,
+    "action": "report_list",
+    "files": [
+      {
+        "name": "MEMORY",
+        "path": "${HERMES_HOME}/memories/MEMORY.md",
+        "limit": 12000
+      },
+      {
+        "name": "USER",
+        "path": "${HERMES_HOME}/memories/USER.md",
+        "limit": 4000
+      }
+    ]
+  },
+  "output": {
+    "quiet_when_clean": true,
+    "report_file": "${HERMES_HOME}/reports/mem_guard-report.md"
+  },
+  "consolidation": {
+    "_comment": "整理员 consolidator 阈值（声明式：改这里不碰引擎）",
+    "demote_min_len": 150,
+    "project_prefixes": [],
+    "dup_prefix": 20,
+    "retention_days": 30
+  },
+  "curation": {
+    "_comment": "记忆管理员 curator 声明式配置：ticket 队列 + 质量门 + 分类复用 classification_rules",
+    "ticket_dir": "${HERMES_HOME}/scripts/memory_tickets",
+    "ticket_file": "tickets.jsonl",
+    "quality_gate": {
+      "min_len_keep": 10,
+      "noise_keywords": [
+        "测试ticket",
+        "demo",
+        "随便"
+      ],
+      "dedup_prefix": 20,
+      "dedup_min_overlap": 4,
+      "dedup_same_category_only": true,
+      "dedup_skip_files": [
+        "交接包",
+        "overview",
+        ".abstract",
+        "profile"
+      ]
+    },
+    "approval_policy": "auto_with_backup",
+    "events_governance": {
+      "_comment": "自动抽取产物治理（2026-09-25 新增，对齐 OpenClaw Dreaming REM/Deep）：curator --govern-events 对最近 window_days 天 SessionCommit 抽取产物做准入/去重/类目三查。write_mode=report_only=只报告不删改（ADD-only 保守默认，处置由用户拍板）；min_len_keep=低质阈值；dedup_min_overlap=重复判定重叠词数（事件文件比 ticket 长，默认 8 从严防误报）",
+      "enabled": true,
+      "window_days": 1,
+      "min_len_keep": 40,
+      "dedup_min_overlap": 8,
+      "dedup_min_similarity": 0.3,
+      "noise_keywords": [
+        "测试ticket",
+        "demo",
+        "随便"
+      ],
+      "dedup_skip_files": [
+        "交接包",
+        "overview",
+        ".overview",
+        ".abstract",
+        "profile",
+        "info_pipeline_run",
+        "star3_selection",
+        "daily_info_automation",
+        "info_automation_processed"
+      ],
+      "stopwords": [
+        "信息", "文件", "下载", "处理", "成功", "完成", "更新", "同步", "采集",
+        "写入", "记录", "生成", "运行", "确认", "使用", "进行", "已经", "提供",
+        "输出", "检查", "发现", "需要", "内容", "相关", "本次", "以及", "其中",
+        "还是", "可以", "没有", "这个", "那个", "报告", "任务", "完成情况",
+        "Summary", "ChatLog", "memory", "event", "events", "type", "source",
+        "id", "name", "goal", "to", "user", "com", "https", "extraction",
+        "FIELDS", "ranges", "MEMORY", "session", "assistant",
+        "content", "timestamp", "status", "vector", "abstract",
+        "AI", "ai", "agent", "Hermes", "Users", "free", "version",
+        "标题", "格式", "路径", "链接", "文章", "订阅", "账号", "配置"
+      ],
+      "write_mode": "report_only"
+    },
+    "write": {
+      "viking_enabled": true,
+      "l1_pointer_update": "report_only"
+    }
+  }
+}

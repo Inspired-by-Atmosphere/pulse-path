@@ -1,0 +1,11 @@
+# Runtime: standard library only (Python 3.8+).
+# The skill engines deliberately have zero third-party dependencies so they can run
+# on a bare interpreter from a scheduled job or a fresh machine.
+#
+# Optional integrations (NOT required; all code paths degrade gracefully without them):
+#   - an OpenViking-like semantic store CLI on PATH or at $OV_CLI  (used by curator --commit)
+#   - an external governance/approval module at $GOVERNANCE_MODULE_DIR (used by curator, optional)
+#
+# Install nothing to run the checks and tests:
+#   python skills/pulse-path/scripts/scan_links.py .
+#   python skills/memory-pointer-system/scripts/test_mem_guard.py

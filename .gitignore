@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Runtime output (reports/tickets/backups produced by the engines)
+reports/
+memory_tickets/
+*.bak
+*.bak_*
+*.bak-*
+*~
+
+# Secrets — never commit
+.env
+.env.*
+*.pem
+*.key

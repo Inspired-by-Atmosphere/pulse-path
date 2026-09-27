@@ -1,0 +1,78 @@
+{
+  "_readme": [
+    "mem_rules.json 起点模板：复制为 skills/memory-pointer-system/scripts/mem_rules.json 后按需改。",
+    "引擎零业务 if：加新 scheme = 加 3 行（verify/autofix/report）；加新检查 = damage.detect 加一条。",
+    "路径支持 ~ 与 $VAR，相对路径按 HERMES_HOME 解析。示例见 examples/MEMORY.sample.md。"
+  ],
+  "version": "1.0",
+  "schemes": {
+    "skill": { "verify": "skill_dir", "autofix": ["case_fix", "unique_approx"], "report": "red_if_unfixable" },
+    "doc": { "verify": "path_exist", "autofix": ["sep_fix"], "report": "red_if_unfixable" },
+    "script": { "verify": "scripts_dir", "autofix": [], "report": "red" },
+    "cfg": { "verify": "env_key", "autofix": [], "report": "red" },
+    "env": { "verify": "env_key", "autofix": [], "report": "red" },
+    "viking": { "verify": "viking_uri", "autofix": [], "report": "pending" },
+    "fact": { "verify": "fact_id", "autofix": [], "report": "pending" },
+    "rule": { "verify": "rule_doc", "autofix": [], "report": "pending" },
+    "cron": { "verify": "cron_id", "autofix": [], "report": "pending" },
+    "mem": { "verify": "mem_key", "autofix": [], "report": "pending" }
+  },
+  "damage": {
+    "detect": ["pointer_mangled", "dup_key"],
+    "action": "red"
+  },
+  "content_scans": {
+    "ghost_scripts": {
+      "target": "",
+      "zone_dirs": [],
+      "plan_zone_dirs": [],
+      "skip_dirs": ["03_交付区", "06_简报"],
+      "search_roots": [],
+      "enabled": false
+    }
+  },
+  "watermark": {
+    "enabled": true,
+    "threshold": 80,
+    "action": "report_list",
+    "files": [
+      { "name": "MEMORY", "path": "${HERMES_HOME}/memories/MEMORY.md", "limit": 12000 },
+      { "name": "USER", "path": "${HERMES_HOME}/memories/USER.md", "limit": 4000 }
+    ]
+  },
+  "output": {
+    "quiet_when_clean": true,
+    "report_file": "${HERMES_HOME}/reports/mem_guard-report.md"
+  },
+  "consolidation": {
+    "demote_min_len": 150,
+    "dup_prefix": 20,
+    "retention_days": 30,
+    "project_prefixes": []
+  },
+  "curation": {
+    "ticket_dir": "${HERMES_HOME}/scripts/memory_tickets",
+    "ticket_file": "tickets.jsonl",
+    "quality_gate": {
+      "min_len_keep": 10,
+      "noise_keywords": ["测试ticket", "demo"],
+      "dedup_prefix": 20,
+      "dedup_min_overlap": 4,
+      "dedup_same_category_only": true,
+      "dedup_skip_files": ["overview", "profile"]
+    },
+    "approval_policy": "auto_with_backup",
+    "events_governance": {
+      "enabled": false,
+      "window_days": 1,
+      "min_len_keep": 40,
+      "dedup_min_overlap": 8,
+      "dedup_min_similarity": 0.3,
+      "write_mode": "report_only"
+    },
+    "write": {
+      "viking_enabled": true,
+      "l1_pointer_update": "report_only"
+    }
+  }
+}
