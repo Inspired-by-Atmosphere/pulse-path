@@ -90,6 +90,15 @@ DOC_PATH_RE = re.compile(
 # form used in gate documentation) is a pattern, not a path.
 CLASS_IN_PATH_RE = re.compile(r"\[[^\]\s]{1,32}\]?")
 
+# An elided path ("/c/...", "C:\\...", "<drive>:/path/to/x.py") is documentation
+# shorthand. Only the dots survive once the prefix is stripped, so nothing about
+# the author's real filesystem is disclosed.
+ELIDED_PATH_RE = re.compile(r"(?i)^(?:[A-Za-z]:[\\/]|/(?:[c-z]|mnt/[c-z])/)?[.\\/\s]+$")
+
+# Code member expressions that only look like host names: Path.home(),
+# obj["local"], self.corp_id and friends are attributes, not topology.
+CODE_MEMBER_RE = re.compile(r"^\s*[\(\[\.]")
+
 # Complete private addresses only: all four octets have to be numeric, so the
 # documentation forms 192.168.1.x and 10.0.0.x never match. Use RFC 5737 ranges
 # (TEST-NET-1/2/3) in documentation when a complete address is needed.
@@ -235,7 +244,18 @@ def iter_files(root, skip_names, skip_prefixes):
 
 def path_allowed(hit):
     """True when an absolute-path match is a placeholder, not a real path."""
-    return bool(DOC_PATH_RE.search(hit) or CLASS_IN_PATH_RE.search(hit))
+    return bool(DOC_PATH_RE.search(hit)
+                or CLASS_IN_PATH_RE.search(hit)
+                or ELIDED_PATH_RE.match(hit.strip()))
+
+
+def hostname_allowed(hit, line, end):
+    """True when a host-name-shaped match is really a code member expression."""
+    if UCI_LAN_ALLOW.match(hit):
+        return True
+    if hit[:1].isupper() and CODE_MEMBER_RE.match(line[end:end + 1] or "("):
+        return True
+    return False
 
 
 def scan_file(path, max_bytes):
@@ -256,7 +276,7 @@ def scan_file(path, max_bytes):
                 hit = match.group(0) or ""
                 if name == "absolute-path" and path_allowed(hit):
                     continue
-                if name == "internal-hostname" and UCI_LAN_ALLOW.match(hit):
+                if name == "internal-hostname" and hostname_allowed(hit, line, match.end()):
                     continue
                 findings.append((lineno, name, mask(hit, keep=0) if name == "absolute-path" else mask(hit)))
         for match in EMAIL_RE.finditer(line):
