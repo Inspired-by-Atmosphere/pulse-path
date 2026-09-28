@@ -41,7 +41,10 @@ import sys
 #   MEM_GUARD_ENV     .env 文件（默认 $HERMES_HOME/.env）
 #   MEM_GUARD_CONFIG  config.yaml（默认 $HERMES_HOME/config.yaml）
 # 规则表里的相对路径按 HERMES_HOME 解析，${VAR} 会展开环境变量。
-HERMES_HOME = os.path.expanduser(os.environ.get("HERMES_HOME") or os.path.join("~", ".hermes"))
+# HERMES_HOME 无论传入相对还是绝对路径，都会被规范化为绝对路径——否则规则表里的
+# ${HERMES_HOME}/... 展开出相对路径后会被再拼接一次，水位检查就会指向不存在的文件。
+HERMES_HOME = os.path.abspath(os.path.expanduser(os.environ.get("HERMES_HOME") or os.path.join("~", ".hermes")))
+os.environ["HERMES_HOME"] = HERMES_HOME   # 规范化后写回环境：规则表里的 ${HERMES_HOME} 由 expandvars 展开，读到的是环境原值
 _BASE = os.path.dirname(os.path.abspath(__file__))
 
 

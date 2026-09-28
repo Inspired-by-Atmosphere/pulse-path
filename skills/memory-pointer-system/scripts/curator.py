@@ -18,7 +18,8 @@ import sys
 from datetime import datetime, timedelta
 
 BASE = os.path.dirname(os.path.abspath(__file__))
-HERMES_HOME = os.path.expanduser(os.environ.get("HERMES_HOME") or os.path.join("~", ".hermes"))
+HERMES_HOME = os.path.abspath(os.path.expanduser(os.environ.get("HERMES_HOME") or os.path.join("~", ".hermes")))
+os.environ["HERMES_HOME"] = HERMES_HOME   # 规范化后写回环境：规则表里的 ${HERMES_HOME} 由 expandvars 展开，读到的是环境原值
 
 
 def _p(env_name, default_rel):

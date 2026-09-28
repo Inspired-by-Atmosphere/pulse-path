@@ -2,7 +2,7 @@
 
 All notable changes to this repository. Format loosely follows Keep a Changelog.
 
-## [Unreleased] — sanitization + superset revision (staging, not pushed)
+## [0.1.0] - 2026-09-28 — first public release (sanitized superset revision)
 
 ### Added
 - `README.zh-CN.md` (Chinese README, aligned with the English one).
@@ -57,6 +57,14 @@ All notable changes to this repository. Format loosely follows Keep a Changelog.
   memory-governance material.
 - The `__pycache__/` artifact that had been committed alongside the scripts; now git-ignored.
 
+### Fixed
+- `HERMES_HOME` is normalised to an absolute path and written back to the environment in all seven
+  scripts. With a relative `HERMES_HOME` (e.g. `HERMES_HOME=./sandbox` for a throwaway demo), the
+  `${HERMES_HOME}/...` entries in `mem_rules.json` expanded to a relative path that was then joined
+  to `HERMES_HOME` a second time — the watermark check reported `MEMORY/USER 读取失败` against a
+  path that could never exist. Found while writing the quickstart; `test_mem_guard.py` still 26/26.
+- `README.md` / `README.zh-CN.md`: quickstart replaced with a 60-second sandboxed demo, including the
+  real command output, so the first thing a visitor sees is what the guard actually catches.
+
 ### Notes
-- Nothing was pushed. No remote was created. The upstream working copy was not modified.
 - Gate results (S1–S5) and the exact commands are recorded in `docs/DIFF_PLAN.md` §5.

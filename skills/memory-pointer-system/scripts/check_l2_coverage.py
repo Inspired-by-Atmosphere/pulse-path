@@ -23,7 +23,8 @@ import re
 from pathlib import Path
 import os
 
-HOME = Path(os.path.expanduser(os.environ.get("HERMES_HOME") or os.path.join("~", ".hermes")))
+HOME = Path(os.path.abspath(os.path.expanduser(os.environ.get("HERMES_HOME") or os.path.join("~", ".hermes"))))
+os.environ["HERMES_HOME"] = str(HOME)
 SK = HOME / "skills"
 VIKING = Path(os.path.expanduser(os.environ.get("VIKING_ROOT")
                                  or os.path.join("~", ".openviking", "data", "viking", "default")))

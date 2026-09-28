@@ -55,7 +55,39 @@ pulse-path/
 或任何读取带 YAML front matter 的 `SKILL.md` 的加载器）。三者可独立使用——
 多数使用者只需要 `pulse-path` + `scan_links.py`。
 
-## 快速上手 / Quick start
+## 快速上手（60 秒）/ Quick start
+
+只要 Python 3 标准库——无需安装任何依赖。把体检引擎指向一份**一次性沙箱**里的样例，直接看它抓断链：
+
+```bash
+SANDBOX=/tmp/pp-demo                       # 任意一次性目录
+mkdir -p "$SANDBOX/memories"
+cp examples/MEMORY.sample.md "$SANDBOX/memories/MEMORY.md"
+printf '# User profile\n- Demo line\n' > "$SANDBOX/memories/USER.md"
+
+HERMES_HOME="$SANDBOX" python skills/memory-pointer-system/scripts/mem_guard.py --check --verbose
+SKILLS_ROOT=skills     python skills/pulse-path/scripts/scan_links.py skills
+```
+
+`--check` 是 dry-run：只报告不写回，绝不会改动你的指针文件。上面两条命令的真实输出如下（`$SANDBOX` 代表你用的那个目录）：
+
+```text
+🛡 mem_guard v2 体检 2026-09-28 10:13
+🔴 需人工决策 4 条:
+  L14 pp: 断链: skill://pulse-path（技能 pulse-path 不存在于 $SANDBOX\skills）
+  L15 mps: 断链: skill://memory-pointer-system（技能 memory-pointer-system 不存在于 $SANDBOX\skills）
+  L17 gone: 断链: doc://examples/does-not-exist.md（路径不存在: examples/does-not-exist.md）
+  L18 svc: 断链: cfg://SAMPLE_SERVICE_KEY（.env 不存在）
+✅ 正常 1 | ? 待全量版 0 | 指针总数 5
+
+技能库索引: 6 个技能名
+
+✅ 无失效引用
+```
+
+`L14`/`L15` 报错是预期的：沙箱里没有 `skills/` 目录——这正是这套体检要抓的那类错误；`L17`/`L18` 则是样例夹具**故意**留的两条悬空指针。
+
+接着把它接进你自己的项目：
 
 1. 把 `skills/pulse-path/`（或三个技能全部）放入你的 agent 技能目录
 2. 每次整理后跑体检：

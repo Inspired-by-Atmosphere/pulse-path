@@ -31,7 +31,8 @@ import sys
 #   SKILLS_ROOT    技能库根（skill:// 引用校验基准），默认 $HERMES_HOME/skills
 #   SCAN_DIRS      默认扫描目录，os.pathsep 分隔（命令行给了目录则忽略），
 #                  默认 "$HERMES_HOME/skills" + 当前目录
-HERMES_HOME = os.path.expanduser(os.environ.get("HERMES_HOME") or os.path.join("~", ".hermes"))
+HERMES_HOME = os.path.abspath(os.path.expanduser(os.environ.get("HERMES_HOME") or os.path.join("~", ".hermes")))
+os.environ["HERMES_HOME"] = HERMES_HOME   # 规范化后写回环境：规则表里的 ${HERMES_HOME} 由 expandvars 展开，读到的是环境原值
 SKILLS_ROOT = os.path.expanduser(os.environ.get("SKILLS_ROOT")
                                  or os.path.join(HERMES_HOME, "skills"))
 _env_dirs = os.environ.get("SCAN_DIRS")

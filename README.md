@@ -60,7 +60,44 @@ The three skills are drop-in agent skills (`.claude/skills/`, a Hermes `skills/`
 loader that reads a `SKILL.md` with YAML front matter). They are usable independently — most teams
 will only want `pulse-path` plus `scan_links.py`.
 
-## Quickstart
+## Quick start (60 seconds)
+
+Python 3 standard library only — no install, no dependencies. Point the guard at a
+throwaway copy of the fixtures and watch it catch broken pointers:
+
+```bash
+SANDBOX=/tmp/pp-demo                       # any throwaway directory
+mkdir -p "$SANDBOX/memories"
+cp examples/MEMORY.sample.md "$SANDBOX/memories/MEMORY.md"
+printf '# User profile\n- Demo line\n' > "$SANDBOX/memories/USER.md"
+
+HERMES_HOME="$SANDBOX" python skills/memory-pointer-system/scripts/mem_guard.py --check --verbose
+SKILLS_ROOT=skills     python skills/pulse-path/scripts/scan_links.py skills
+```
+
+`--check` is a dry run: it reports and exits, it never rewrites the pointer file.
+Verbatim output of those two commands (`$SANDBOX` stands for whatever directory you
+used; the tool reports in Chinese):
+
+```text
+🛡 mem_guard v2 体检 2026-09-28 10:13
+🔴 需人工决策 4 条:
+  L14 pp: 断链: skill://pulse-path（技能 pulse-path 不存在于 $SANDBOX\skills）
+  L15 mps: 断链: skill://memory-pointer-system（技能 memory-pointer-system 不存在于 $SANDBOX\skills）
+  L17 gone: 断链: doc://examples/does-not-exist.md（路径不存在: examples/does-not-exist.md）
+  L18 svc: 断链: cfg://SAMPLE_SERVICE_KEY（.env 不存在）
+✅ 正常 1 | ? 待全量版 0 | 指针总数 5
+
+技能库索引: 6 个技能名
+
+✅ 无失效引用
+```
+
+The `L14`/`L15` lines are expected: the sandbox has no `skills/` directory, which is
+exactly the class of mistake the guard exists to catch. `L17`/`L18` are the two
+dangling pointers the sample fixture ships on purpose.
+
+Then wire it into your own project:
 
 1. Copy `skills/pulse-path/` (or all three) into your agent's skill directory.
 2. Run the link-integrity check over your docs after any reorganization:
