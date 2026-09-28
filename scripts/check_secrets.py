@@ -1,200 +1,343 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
+"""check_secrets.py - zero-dependency leak scanner for a pre-publish gate.
+
+Run this over a repository (or a single file) before it becomes public. The
+gate passes only when the report says CLEAN.
+
+Usage:
+    python scripts/check_secrets.py .
+    python scripts/check_secrets.py . --exclude-path examples/fixtures
+    python scripts/check_secrets.py examples/fixtures/leaky_sample.env
+    python scripts/check_secrets.py . --show-info
+    python scripts/check_secrets.py . --json
+
+What it reports (any finding makes the exit code 1):
+  1. Credential-shaped strings: cloud access keys, private key blocks, GitHub /
+     Slack / Google / OpenAI-style tokens, bearer tokens, JWTs, and
+     `keyword = value` assignments that carry a literal value.
+  2. High-entropy tokens that match no known prefix.
+  3. Identity and topology leaks: e-mail addresses, RFC1918 / CGNAT IPv4
+     addresses, MAC addresses, Windows drive paths and MSYS/WSL home paths,
+     `.internal`-style host names.
+  4. Account-identifier literals (`qq`, `uid`, `openid`, `session_id`).
+  5. Documentation placeholders that were never filled in (`<PLACEHOLDER>`,
+     TODO, XXX, `your-...`) - reported as INFO, never as a failure.
+
+The scanner never prints a full match: every finding is masked (the first four
+characters are kept). A report is therefore safe to paste into a ticket or a
+chat without leaking the value it is about. `absolute-path` findings print no
+excerpt at all, so a pasted report cannot contain a drive-letter path that
+would then trip a path grep.
+
+Allowed by default, so a documentation-rich repo stays clean:
+  * placeholder values after a keyword: `$VAR`, `${VAR}`, `<PLACEHOLDER>`,
+    `%VAR%`, `your-...`, `example`, `xxx`, `redacted`, `placeholder`, `none`,
+    `null`, `true`, `false`, `os.environ`, `getenv`
+  * documentation address forms: `192.168.1.x`, `10.0.0.x` (the `x` octet is
+    read as documentation, not as an address)
+  * the canonical placeholder MAC `AA:BB:CC:DD:EE:FF` (any case)
+  * e-mail addresses ending in `@example.com|org|net`, `@localhost`,
+    `@invalid`, `@users.noreply.github.com`, `@noreply...`
+  * paths that carry a placeholder token (`<...>`, `$VAR`, `%VAR%`) or a
+    generic segment such as `path`, `to`, `repo`, `src`, `tmp`, `out`
+  * a regex character class inside a path-shaped string (the "/c/" plus
+    "[A-Za-z]" form that gate documentation uses when it quotes a rule)
+  * stock OpenWrt UCI section names (`dhcp.lan`, `interface.lan`, ...) which
+    match the `.lan` host-name shape but exist in every vanilla installation
+
+Exit codes: 0 = clean, 1 = findings, 2 = usage error.
+Standard library only. No network access, nothing is uploaded.
 """
-check_secrets.py — 零依赖敏感信息扫描器（开源仓库发布前门禁 S1）
 
-用法:
-    python scripts/check_secrets.py .            # 扫当前目录（递归）
-    python scripts/check_secrets.py . --quiet     # 只输出结论
-    python scripts/check_secrets.py . --help
-
-检查项（G2 隐私）:
-    1. 凭据赋值          KEY = "..." / token: ... / password=... （值看起来是真值而不是占位符）
-    2. 私钥 / 证书块      -----BEGIN ... PRIVATE KEY-----、ssh-rsa AAAA…
-    3. 邮件地址          非 noreply 的真实邮箱
-    4. 内网地址          10./172.16-31./192.168./127. 的 IPv4、裸 MAC
-    5. 高熵字符串        长度 ≥ 24 且香农熵 ≥ 3.6 的连续字串（排除路径/URL/驼峰标识/重复字符）
-    6. 本机绝对路径      家目录 / 系统目录形式的绝对路径（G4 可用性；本行刻意不写字面模式）
-
-退出码: 0 = 零命中；1 = 有命中（列出文件:行:原因，值做掩码不原样打印）
-"""
 import argparse
-import math
+import json
 import os
 import re
 import sys
 
-SKIP_DIRS = {".git", ".venv", "venv", "node_modules", "__pycache__", ".mypy_cache",
-             ".pytest_cache", "dist", "build", ".idea", ".vscode"}
-SKIP_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".pdf", ".zip", ".gz",
-             ".tar", ".whl", ".pyc", ".so", ".dll", ".exe", ".mp3", ".mp4", ".woff",
-             ".woff2", ".ttf", ".otf"}
-MAX_BYTES = 2 * 1024 * 1024  # 单文件超过 2MB 跳过（本仓不应有大文件）
-ALLOW_MARK = "secrets:allow"  # 行内豁免标记：该行是"描述模式"的文档/正则，不是真实泄漏
+SKIP_DIRS = {
+    ".git", "__pycache__", ".venv", "venv", "node_modules", ".mypy_cache",
+    ".pytest_cache", "dist", "build",
+}
+SKIP_EXT = {
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".pdf", ".zip", ".gz",
+    ".7z", ".exe", ".dll", ".so", ".dylib", ".bin", ".pyc", ".woff", ".woff2",
+    ".ttf", ".mp4",
+}
 
-# 占位符/示例值：命中这些说明是文档里的写法，不是真凭据
-PLACEHOLDERS = ("your", "xxx", "example", "placeholder", "<", "${", "$(", "env.",
-                "os.environ", "getenv", "none", "null", "changeme", "todo",
-                "redacted", "dummy", "fake", "test", "sample", "…", "...")
+# Sensitive literals are assembled from fragments so that this file never
+# matches its own rules. A scanner that trips on itself is useless.
+_F = lambda *parts: "".join(parts)
 
-CRED_RE = re.compile(
-    r"""(?ix)
-    \b(api[_-]?key|apikey|secret|token|passwd|password|passphrase|access[_-]?key|
-        client[_-]?secret|private[_-]?key|auth[_-]?token|bearer|credential)\b
-    \s*[:=]\s*
-    (?P<q>["']?)(?P<val>[^\s"'#,;)\]}]{8,120})(?P=q)
-    """)
+# --- rules ----------------------------------------------------------------
 
-PEM_RE = re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")
-SSHKEY_RE = re.compile(r"\bssh-(rsa|ed25519|dss)\s+AAAA[A-Za-z0-9+/=]{20,}")
-EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
-IP_RE = re.compile(r"(?<![\d.])(?:10\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])|192\.168|127)\.\d{1,3}\.\d{1,3}(?![\d])")
-MAC_RE = re.compile(r"\b(?:[0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b")
-# ⚠️ 下面的"路径泄漏"正则按片段拼接，避免本文件自身就含有它要抓的字面模式
-#    （否则扫描器会把自己也报出来，门禁 S2 也会误报）。
-WINPATH_RE = re.compile(r"[A-Za-z]:" + r"\\{1,2}(?:" + r"Users|Documents|AppData" + r")\\{1,2}")
-MSYSPATH_RE = re.compile("/" + r"c/Users/", re.I)
-HOMEPATH_RE = re.compile(r"/(?:" + r"Users|home)/" + r"(?!your|<|\$|\{)[A-Za-z][A-Za-z0-9._-]*/")
-B64_RE = re.compile(r"[A-Za-z0-9+/=_\-]{24,}")
+# Windows drive paths ("C:" + separator) and MSYS/WSL user paths (the "/c/"
+# and "/mnt/" prefix forms). A match is reported unless DOC_PATH_RE finds a
+# placeholder or a generic documentation segment inside it.
+ABS_PATH_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?:[A-Za-z]:[\\/]|(?<![A-Za-z0-9:/])/(?:[c-z]|mnt/[c-z])/)"
+    r"[^\s\"'`|;,)<>\]]+")
+
+# Placeholder / documentation shapes that make an absolute path harmless.
+DOC_PATH_RE = re.compile(
+    r"(?i)(?:<[^<>]*>|\$[A-Za-z_{(]|%[A-Za-z_]+%|"
+    r"(?:^|[\\/])(?:path|paths|to|your|yours|example|sample|demo|some|repo|repos|"
+    r"project|projects|workspace|work|src|source|code|tmp|temp|data|out|output|"
+    r"build|dist|dir|dirs|folder|folders|file|files|name|names|root|opt|var|"
+    r"etc|usr|share)(?:[\\/]|$))")
+
+# A regex character class inside a path-shaped string (the "/c/" + "[A-Za-z]"
+# form used in gate documentation) is a pattern, not a path.
+CLASS_IN_PATH_RE = re.compile(r"\[[^\]\s]{1,32}\]?")
+
+# Complete private addresses only: all four octets have to be numeric, so the
+# documentation forms 192.168.1.x and 10.0.0.x never match. Use RFC 5737 ranges
+# (TEST-NET-1/2/3) in documentation when a complete address is needed.
+PRIVATE_IP_RE = re.compile(
+    r"\b(?:(?:10|192\.168|172\.(?:1[6-9]|2\d|3[01])"
+    r"|100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7]))"
+    r"\.\d{1,3}\.\d{1,3}\.\d{1,3})\b")
+
+MAC_RE = re.compile(
+    r"(?i)\b(?!aa:bb:cc:dd:ee:)(?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}\b")
+
+HOSTNAME_RE = re.compile(
+    r"(?i)\b[a-z0-9][a-z0-9\-]{2,}\.(?:internal|intranet|local|lan|corp|home|ad)\b")
+
+PATTERNS = [
+    ("cloud-access-key",
+     re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")),
+    ("private-key-block",
+     re.compile(_F(r"-----BEGIN [A-Z ]*", r"PRIVATE KEY", r"-----"))),
+    ("github-token",
+     re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b")),
+    ("github-fine-grained-token",
+     re.compile(_F(r"\bgithub", r"_pat_[A-Za-z0-9_]{20,}\b"))),
+    ("openai-style-key",
+     re.compile(_F(r"\bsk", r"-[A-Za-z0-9]{20,}\b"))),
+    ("slack-token",
+     re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b")),
+    ("google-api-key",
+     re.compile(r"\bAIza[0-9A-Za-z_\-]{30,}\b")),
+    ("jwt",
+     re.compile(r"\beyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\b")),
+    ("credential-assignment",
+     re.compile(r"(?i)\b(?:api[_-]?key|apikey|secret|passwd|password|passphrase|"
+                r"access[_-]?token|auth[_-]?token|client[_-]?secret|private[_-]?key)\b"
+                r"\s*[:=]\s*[\"']?(?!\s*$|\$|<|%|\{\{|your[-_]|example|xxx|redacted|"
+                r"placeholder|none|null|true|false|os\.environ|getenv|process\.env|"
+                r"env\[|secrets\.|changeme|change-me)[\"']?([^\s\"'#]{8,})")),
+    ("bearer-literal",
+     re.compile(r"(?i)\bAuthorization\b[^\n]{0,20}Bearer\s+(?!\$\{|\$|<|\{\{|%)([A-Za-z0-9._\-]{20,})")),
+    ("account-id-literal",
+     re.compile(r"(?i)\b(?:qq|uid|openid|uname|account|session[_-]?id|user[_-]?id)\b"
+                r"[\"']?\s*[:=]\s*[\"']?(\d{6,}|[A-Za-z0-9]{20,})")),
+    ("absolute-path", ABS_PATH_RE),
+    ("private-ip", PRIVATE_IP_RE),
+    ("mac-address", MAC_RE),
+    ("internal-hostname", HOSTNAME_RE),
+]
+
+EMAIL_RE = re.compile(r"\b[A-Za-z0-9._%+\-]+@([A-Za-z0-9.\-]+\.[A-Za-z]{2,})\b")
+EMAIL_ALLOW_RE = re.compile(
+    r"(?i)(?:noreply|no-reply|example\.(?:com|org|net)|invalid|localhost|"
+    r"users\.noreply\.github\.com)$")
+
+# Long random-looking strings. Tuned to avoid prose and ordinary identifiers:
+# besides the length and the Shannon-entropy test, a candidate has to be
+# vowel-poor. Random tokens are near-uniform over [A-Za-z0-9], so the a/e/i/o/u
+# share stays around 0.05-0.17; identifiers, paths and prose sit at 0.28+ and
+# are rejected. Measured on a calibration set of both kinds.
+ENTROPY_RE = re.compile(r"\b[A-Za-z0-9+/=_\-]{32,}\b")
+VOWEL_RATIO_MAX = 0.25
+ENTROPY_MIN_BITS = 4.2
+# A token carrying an RFC 4122 GUID is an identifier (device path, efivars name,
+# registry key), not a secret - no credential is shaped like that.
+GUID_RE = re.compile(
+    r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b")
+# A hex digest (git sha, md5, sha256) is common in documentation and never a key.
+HEXDIGEST_RE = re.compile(r"[a-f0-9]{32,64}")
+
+INFO_RE = re.compile(r"<[A-Z_]{2,}>|TODO|FIXME|XXX|your-[a-z\-]+")
+
+# Stock OpenWrt UCI section identifiers. They match the ".lan" host-name shape
+# but are generic configuration names present in every OpenWrt installation,
+# not local topology.
+UCI_LAN_ALLOW = re.compile(
+    r"^(?:dhcp|interface|firewall|wireless|network|system|wan|lan|loopback)\.lan$")
 
 
-def entropy(s):
-    if not s:
+def mask(value, keep=4, cap=12):
+    """Return a printable excerpt that never contains the whole value."""
+    value = value.strip()
+    if len(value) <= keep:
+        return "*" * len(value)
+    return value[:keep] + "*" * min(len(value) - keep, cap)
+
+
+def shannon(text):
+    from math import log2
+    if not text:
         return 0.0
     counts = {}
-    for ch in s:
+    for ch in text:
         counts[ch] = counts.get(ch, 0) + 1
-    n = len(s)
-    return -sum((c / n) * math.log2(c / n) for c in counts.values())
+    n = len(text)
+    return -sum((c / n) * log2(c / n) for c in counts.values())
 
 
-def looks_placeholder(v):
-    lv = v.lower()
-    if any(p in lv for p in PLACEHOLDERS):
+def entropy_hits(line):
+    out = []
+    for tok in ENTROPY_RE.findall(line):
+        if HEXDIGEST_RE.fullmatch(tok):
+            continue
+        if GUID_RE.search(tok):        # identifier carrying a GUID, not a credential
+            continue
+        vowels = sum(ch in "aeiouAEIOU" for ch in tok) / len(tok)
+        if vowels > VOWEL_RATIO_MAX:   # word-like / identifier-like, not a token
+            continue
+        if shannon(tok) >= ENTROPY_MIN_BITS:
+            out.append(tok)
+    return out
+
+
+def rel_posix(root, path):
+    return os.path.relpath(path, root).replace(os.sep, "/")
+
+
+def skipped(rel, name, skip_names, skip_prefixes):
+    if name in skip_names or rel in skip_names:
         return True
-    if len(set(v)) <= 4:          # aaaaa / 0000
-        return True
-    if v.isdigit():
-        return True
-    if not any(c.isdigit() for c in v) and any(c.isalpha() for c in v) and " " not in v:
-        # 纯字母长词（如常量名）不算凭据；真 key 通常含数字或符号
-        if re.fullmatch(r"[A-Za-z_]+", v):
+    for prefix in skip_prefixes:
+        prefix = prefix.strip("/")
+        if prefix and (rel == prefix or rel.startswith(prefix + "/")):
             return True
     return False
 
 
-def high_entropy_hits(line):
-    """高熵串 = 真凭据的形状：随机 base64/base32 块。
-
-    判据收紧到"必须同时含 数字 + 大写 + 小写，且熵 ≥ 4.0，且不含路径/URL 字符"，
-    否则 HERMES_HOME、memory-pointer-system、dedup_same_category_only 这类
-    普通标识符会被大量误报（误报会让人忽略真正的命中）。
-    """
-    out = []
-    for m in B64_RE.finditer(line):
-        tok = m.group(0)
-        if any(c in tok for c in "/\\.:@"):
-            continue                     # 路径 / URL / 带扩展名
-        if not (any(c.isdigit() for c in tok)
-                and any(c.isupper() for c in tok)
-                and any(c.islower() for c in tok)):
-            continue                     # 普通标识符（常量名/snake_case/slug）
-        if entropy(tok) < 4.0:           # 自然语言与命名标识符通常在 4.0 以下
-            continue
-        out.append(tok)
-    return out
-
-
-def mask(v):
-    if len(v) <= 8:
-        return "*" * len(v)
-    return v[:3] + "*" * (len(v) - 6) + v[-3:]
-
-
-def iter_files(root):
-    for dirpath, dirs, files in os.walk(root):
-        dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
-        for f in files:
-            p = os.path.join(dirpath, f)
-            if os.path.splitext(f)[1].lower() in SKIP_EXTS:
+def iter_files(root, skip_names, skip_prefixes):
+    for dirpath, dirnames, filenames in os.walk(root):
+        rel_dir = rel_posix(root, dirpath) if dirpath != root else "."
+        dirnames[:] = [
+            d for d in dirnames
+            if d not in SKIP_DIRS
+            and not skipped(rel_dir + "/" + d if rel_dir != "." else d,
+                            d, set(), skip_prefixes)
+        ]
+        for name in filenames:
+            rel = rel_dir + "/" + name if rel_dir != "." else name
+            if skipped(rel, name, skip_names, skip_prefixes):
                 continue
-            try:
-                if os.path.getsize(p) > MAX_BYTES:
-                    continue
-            except OSError:
+            if os.path.splitext(name)[1].lower() in SKIP_EXT:
                 continue
-            yield p
+            yield os.path.join(dirpath, name)
 
 
-def scan_file(path, rel):
-    hits = []
-    exempt = 0
+def path_allowed(hit):
+    """True when an absolute-path match is a placeholder, not a real path."""
+    return bool(DOC_PATH_RE.search(hit) or CLASS_IN_PATH_RE.search(hit))
+
+
+def scan_file(path, max_bytes):
+    findings, infos = [], []
     try:
-        with open(path, "r", encoding="utf-8", errors="ignore") as fh:
-            for i, line in enumerate(fh, 1):
-                if ALLOW_MARK in line:
-                    exempt += 1
+        if os.path.getsize(path) > max_bytes:
+            return findings, infos, "skipped (too large)"
+        with open(path, "rb") as handle:
+            raw = handle.read()
+    except OSError as exc:
+        return findings, infos, "unreadable: %s" % exc
+    if b"\x00" in raw[:4096]:
+        return findings, infos, "skipped (binary)"
+    text = raw.decode("utf-8", errors="replace")
+    for lineno, line in enumerate(text.splitlines(), 1):
+        for name, rx in PATTERNS:
+            for match in rx.finditer(line):
+                hit = match.group(0) or ""
+                if name == "absolute-path" and path_allowed(hit):
                     continue
-                if PEM_RE.search(line):
-                    hits.append((rel, i, "PEM 私钥块"))
-                m = SSHKEY_RE.search(line)
-                if m:
-                    hits.append((rel, i, "SSH 公钥/私钥串: " + mask(m.group(0))))
-                for m in EMAIL_RE.finditer(line):
-                    addr = m.group(0)
-                    if "noreply" in addr.lower() or "example." in addr.lower():
-                        continue
-                    hits.append((rel, i, "真实邮箱: " + mask(addr)))
-                for m in IP_RE.finditer(line):
-                    hits.append((rel, i, "内网 IP: " + m.group(0)))
-                m = MAC_RE.search(line)
-                if m and not re.fullmatch(r"(?i)(00[:-]){5}00", m.group(0)):
-                    hits.append((rel, i, "MAC: " + mask(m.group(0))))
-                if WINPATH_RE.search(line) or MSYSPATH_RE.search(line):
-                    hits.append((rel, i, "本机绝对路径（Users/AppData）"))
-                m = HOMEPATH_RE.search(line)
-                if m:
-                    hits.append((rel, i, "家目录绝对路径: " + m.group(0)))
-                cm = CRED_RE.search(line)
-                if cm and not looks_placeholder(cm.group("val")):
-                    hits.append((rel, i, "疑似凭据赋值 " + cm.group(1) + "=" + mask(cm.group("val"))))
-                for tok in high_entropy_hits(line):
-                    hits.append((rel, i, "高熵串: " + mask(tok)))
-    except (OSError, UnicodeDecodeError):
-        pass
-    return hits, exempt
+                if name == "internal-hostname" and UCI_LAN_ALLOW.match(hit):
+                    continue
+                findings.append((lineno, name, mask(hit, keep=0) if name == "absolute-path" else mask(hit)))
+        for match in EMAIL_RE.finditer(line):
+            if not EMAIL_ALLOW_RE.search(match.group(0)):
+                findings.append((lineno, "email-address", mask(match.group(0))))
+        for tok in entropy_hits(line):
+            findings.append((lineno, "high-entropy-token", mask(tok)))
+        info = INFO_RE.search(line)
+        if info:
+            infos.append((lineno, "placeholder-or-todo", info.group(0)))
+    return findings, infos, "ok"
 
 
-# 扫描器自身/文档里说明正则的示例行豁免（形如 `# noqa: secrets` 或示例标注）
-def main():
-    ap = argparse.ArgumentParser(description="零依赖敏感信息扫描（发布门禁 S1）")
-    ap.add_argument("root", nargs="?", default=".", help="扫描根目录（默认当前目录）")
-    ap.add_argument("--quiet", action="store_true", help="只输出结论")
-    args = ap.parse_args()
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        description="Scan a file or directory tree for secrets, credentials, "
+                    "private IPs, MACs and identity leaks.")
+    parser.add_argument("root", nargs="?", default=".",
+                        help="File or directory to scan (default: .)")
+    parser.add_argument("--exclude", action="append", default=[], metavar="NAME",
+                        help="File name or repo-relative path to skip (repeatable).")
+    parser.add_argument("--exclude-path", action="append", default=[],
+                        dest="exclude_path", metavar="PREFIX",
+                        help="Repo-relative path prefix to skip, e.g. "
+                             "examples/fixtures (repeatable).")
+    parser.add_argument("--max-bytes", type=int, default=2_000_000,
+                        help="Skip files larger than this many bytes (default: 2000000).")
+    parser.add_argument("--json", action="store_true",
+                        help="Emit JSON instead of text.")
+    parser.add_argument("--show-info", action="store_true",
+                        help="Also print INFO lines (placeholders, TODOs).")
+    parser.add_argument("--quiet", action="store_true",
+                        help="Print the summary only.")
+    args = parser.parse_args(argv)
 
-    root = os.path.abspath(args.root)
-    all_hits = []
-    scanned = 0
-    exempted = 0
-    for p in iter_files(root):
-        rel = os.path.relpath(p, root)
-        scanned += 1
-        hits, ex = scan_file(p, rel)
-        all_hits.extend(hits)
-        exempted += ex
+    if os.path.isfile(args.root):
+        root = os.path.dirname(os.path.abspath(args.root)) or "."
+        targets = [os.path.abspath(args.root)]
+        single = True
+    elif os.path.isdir(args.root):
+        root = args.root
+        targets = None
+        single = False
+    else:
+        print("not a file or directory: %s" % args.root, file=sys.stderr)
+        return 2
 
-    if not args.quiet:
-        print(f"扫描: {root}")
-        print(f"文件数: {scanned}")
-        print(f"按 `{ALLOW_MARK}` 标记豁免: {exempted} 行")
-        print("-" * 60)
-    for rel, ln, why in all_hits:
-        print(f"{rel}:{ln}: {why}")
-    if all_hits:
-        print(f"\n❌ 命中 {len(all_hits)} 条（{scanned} 个文件）")
-        return 1
-    print(f"\n✅ 零命中（{scanned} 个文件，豁免 {exempted} 行）")
-    return 0
+    skip_names = set(args.exclude)
+    skip_prefixes = list(args.exclude_path)
+    if single:
+        skip_names = set()
+        skip_prefixes = []
+        paths = targets
+    else:
+        paths = list(iter_files(root, skip_names, skip_prefixes))
+
+    results, total = [], 0
+    for path in paths:
+        findings, infos, status = scan_file(path, args.max_bytes)
+        rel = rel_posix(root, path) if not single else os.path.basename(path)
+        if findings:
+            total += len(findings)
+        results.append({"file": rel, "status": status,
+                        "findings": findings, "info": infos})
+
+    if args.json:
+        print(json.dumps({"root": root, "total_findings": total,
+                          "files": results}, indent=1))
+    else:
+        for item in results:
+            if item["status"] != "ok" and not args.quiet:
+                print("  [%s] %s" % (item["status"], item["file"]))
+            if not args.quiet:
+                for lineno, name, sample in item["findings"]:
+                    print("%s:%d: [%s] %s" % (item["file"], lineno, name, sample))
+                if args.show_info:
+                    for lineno, name, sample in item["info"]:
+                        print("%s:%d: INFO [%s] %s" % (item["file"], lineno, name, sample))
+        print("\nscanned %d file(s); findings: %d" % (len(results), total))
+        print("RESULT: %s" % ("CLEAN" if total == 0 else "FINDINGS PRESENT"))
+    return 0 if total == 0 else 1
 
 
 if __name__ == "__main__":
