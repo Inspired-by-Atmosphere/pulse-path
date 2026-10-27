@@ -8,6 +8,7 @@ Exposes the repository's read-only health / lint engines as MCP tools:
     pp_scan_links    -> skills/pulse-path/scripts/scan_links.py
     pp_l2_coverage   -> skills/memory-pointer-system/scripts/check_l2_coverage.py
     pp_secrets_scan  -> scripts/check_secrets.py --json
+    pp_search        -> skills/memory-pointer-system/scripts/pp_index.py --search (FTS5)
 
 TRANSPORT / FRAMING
     MCP stdio transport, newline-delimited JSON: one UTF-8 JSON-RPC message per
@@ -68,6 +69,7 @@ ENGINE_PATHS = {
     "scan_links": REPO_ROOT / "skills" / "pulse-path" / "scripts" / "scan_links.py",
     "l2_coverage": REPO_ROOT / "skills" / "memory-pointer-system" / "scripts" / "check_l2_coverage.py",
     "secrets": REPO_ROOT / "scripts" / "check_secrets.py",
+    "index": REPO_ROOT / "skills" / "memory-pointer-system" / "scripts" / "pp_index.py",
 }
 
 ENGINE_LABELS = {
@@ -75,6 +77,7 @@ ENGINE_LABELS = {
     "scan_links": "skills/pulse-path/scripts/scan_links.py",
     "l2_coverage": "skills/memory-pointer-system/scripts/check_l2_coverage.py",
     "secrets": "scripts/check_secrets.py --json",
+    "index": "skills/memory-pointer-system/scripts/pp_index.py",
 }
 
 
@@ -776,6 +779,146 @@ def tool_secrets_scan(args):
     return payload
 
 
+# ───────────────────────── L2 search (pp_index.py) ──────────────────────
+#
+# pp_index.py owns all search semantics (SQLite FTS5 trigram, LIKE fallback for
+# queries under 3 characters, incremental build). This layer only validates
+# arguments, maps exit code 2 to a typed error and reshapes the payload, so the
+# engine stays the single source of truth for hit content.
+
+INDEX_DEFAULT_LIMIT = 8
+INDEX_MAX_LIMIT = 200
+
+
+def _json_object(text):
+    """Best-effort JSON object out of an engine's stdout (tolerates noise around it)."""
+    text = (text or "").strip()
+    if not text:
+        return None
+    try:
+        value = json.loads(text)
+    except ValueError:
+        start, end = text.find("{"), text.rfind("}")
+        if start < 0 or end <= start:
+            return None
+        try:
+            value = json.loads(text[start:end + 1])
+        except ValueError:
+            return None
+    return value if isinstance(value, dict) else None
+
+
+def tool_pp_search(args):
+    query = args.get("query")
+    if not isinstance(query, str) or not query.strip():
+        raise ValueError("query must be a non-empty string")
+    query = query.strip()
+
+    limit = args.get("limit")
+    if limit is None:
+        limit = INDEX_DEFAULT_LIMIT
+    if isinstance(limit, bool) or not isinstance(limit, int) \
+            or not 1 <= limit <= INDEX_MAX_LIMIT:
+        raise ValueError("limit must be an integer between 1 and %d" % INDEX_MAX_LIMIT)
+
+    rebuild = args.get("rebuild")
+    if rebuild is None:
+        rebuild = False
+    if not isinstance(rebuild, bool):
+        raise ValueError("rebuild must be a boolean")
+
+    build_run = None
+    if rebuild:
+        build_run = run_engine("index", ["--build", "--json"], timeout_s=args.get("timeout_s"))
+        if not build_run["ok"]:
+            return engine_failure_payload("index", build_run)
+        if build_run["returncode"] != 0:
+            built = _json_object(build_run["stdout"]) or {}
+            err = built.get("error") or {}
+            return {
+                "ok": False,
+                "status": "engine_error",
+                "engine": ENGINE_LABELS["index"],
+                "query": query,
+                "error": {"kind": err.get("kind") or "build_failed",
+                          "message": err.get("message") or "pp_index.py --build failed",
+                          "exit_code": build_run["returncode"]},
+                "hint": err.get("hint") or "check $HERMES_HOME, the pointer file and sqlite FTS5 support",
+                "stdout_tail": _tail(build_run["stdout"]),
+                "stderr_tail": _tail(build_run["stderr"]),
+                "duration_ms": build_run["duration_ms"],
+            }
+
+    run = run_engine("index", ["--search", query, "--limit", str(limit), "--json"],
+                     timeout_s=args.get("timeout_s"))
+    if not run["ok"]:
+        return engine_failure_payload("index", run)
+
+    data = _json_object(run["stdout"])
+    if run["returncode"] == 2:
+        err = (data or {}).get("error") or {}
+        payload = {
+            "ok": False,
+            "status": "index_missing" if err.get("kind") == "index_missing" else "engine_error",
+            "engine": ENGINE_LABELS["index"],
+            "query": query,
+            "error": {"kind": err.get("kind") or "engine_error",
+                      "message": err.get("message") or "pp_index.py --search failed",
+                      "exit_code": 2},
+            "hint": err.get("hint") or "call pp_search again with rebuild=true, or run pp_index.py --build",
+            "stderr_tail": _tail(run["stderr"]),
+            "duration_ms": run["duration_ms"],
+        }
+        if data is not None:
+            payload["raw_report"] = run["stdout"].strip()
+        return payload
+    if data is None:
+        return bad_output_payload("index",
+                                 "pp_index.py --search --json did not emit JSON",
+                                 run, query=query)
+
+    hits = []
+    for item in data.get("hits") or []:
+        if not isinstance(item, dict):
+            continue
+        hit = {"path": item.get("path"), "score": item.get("score"),
+               "snippet": item.get("snippet")}
+        if item.get("pointer_key"):
+            hit["pointer_key"] = item["pointer_key"]
+        if item.get("pointer_keys"):
+            hit["pointer_keys"] = item["pointer_keys"]
+        if item.get("source"):
+            hit["source"] = item["source"]
+        hits.append(hit)
+
+    payload = {
+        "ok": True,
+        "status": "searched",
+        "engine": ENGINE_LABELS["index"],
+        "query": data.get("query") or query,
+        "mode": data.get("mode"),
+        "hits": hits,
+        "hits_total": data.get("hits_total", len(hits)),
+        "index": data.get("index") or {},
+        "engine_exit_code": run["returncode"],
+        "duration_ms": run["duration_ms"],
+        "raw_report": run["stdout"].strip(),
+    }
+    if build_run is not None:
+        built = _json_object(build_run["stdout"]) or {}
+        payload["rebuilt"] = True
+        payload["build"] = {
+            "docs": (built.get("index") or {}).get("docs"),
+            "added": (built.get("build") or {}).get("added"),
+            "updated": (built.get("build") or {}).get("updated"),
+            "skipped": (built.get("build") or {}).get("skipped"),
+            "removed": (built.get("build") or {}).get("removed"),
+        }
+    if not hits:
+        payload["note"] = data.get("note") or "no document in the index matched this query"
+    return payload
+
+
 TOOLS = [
     {
         "name": "pp_guard_check",
@@ -876,6 +1019,50 @@ TOOLS = [
                         "idempotentHint": True, "openWorldHint": False},
         "handler": tool_secrets_scan,
     },
+    {
+        "name": "pp_search",
+        "title": "pulse-path L2 full-text search (offline)",
+        "description": (
+            "Search the L2 bodies behind the pointers — doc:// files and skill:// "
+            "SKILL.md plus references/*.md — through an offline SQLite FTS5 index "
+            "(trigram tokenizer, so Chinese and English substrings both match). A "
+            "query shorter than 3 characters falls back to a LIKE scan and the payload "
+            "says mode=\"like\". Returns hits (path / score / snippet / pointer_key) and "
+            "the index snapshot (docs / built_at / stale). rebuild=true refreshes the "
+            "disposable index cache under $HERMES_HOME/.pp_index first (incremental: "
+            "unchanged files are skipped); the repo and the memory store are never written."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Keywords to look for. Space-separated terms are ANDed.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 200,
+                    "default": 8,
+                    "description": "Maximum number of hits to return (default 8, max 200).",
+                },
+                "rebuild": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": (
+                        "Build/refresh the index before searching. Incremental — files whose "
+                        "mtime and size are unchanged are skipped."
+                    ),
+                },
+                "timeout_s": TIMEOUT_SCHEMA,
+            },
+            "required": ["query"],
+            "additionalProperties": False,
+        },
+        "annotations": {"readOnlyHint": True, "destructiveHint": False,
+                        "idempotentHint": True, "openWorldHint": False},
+        "handler": tool_pp_search,
+    },
 ]
 
 TOOLS_BY_NAME = {tool["name"]: tool for tool in TOOLS}
@@ -885,9 +1072,11 @@ INSTRUCTIONS = (
     "pp_guard_check = pointer dictionary validation (red/yellow/normal), "
     "pp_scan_links = broken knowledge-link lint, "
     "pp_l2_coverage = pre-flight check before trimming a pointer summary, "
-    "pp_secrets_scan = pre-publish leak scan. "
-    "All tools are idempotent, never write files and never modify the memory store; "
-    "path arguments may be absolute or relative to the pulse-path repo root."
+    "pp_secrets_scan = pre-publish leak scan, "
+    "pp_search = offline full-text search over the L2 bodies behind the pointers "
+    "(SQLite FTS5; rebuild=true refreshes its own disposable cache). "
+    "All tools are idempotent, never modify the memory store, and never touch the "
+    "repository; path arguments may be absolute or relative to the pulse-path repo root."
 )
 
 
@@ -1016,11 +1205,12 @@ def serve_stream(stdin, stdout):
 
 HELP = """pulse-path MCP server %s — stdio JSON-RPC 2.0, zero dependencies
 
-Tools (all read-only, idempotent):
+Tools (read-only, idempotent):
   pp_guard_check    memory_file?  mem_guard.py --check --verbose
   pp_scan_links     dirs[]?       scan_links.py
   pp_l2_coverage    memory_file?  check_l2_coverage.py
   pp_secrets_scan   path?         check_secrets.py --json
+  pp_search         query, limit?, rebuild?  pp_index.py --search (FTS5)
 
 Framing: newline-delimited JSON (one message per line, UTF-8).
          'Content-Length: N' header frames are accepted as a fallback.

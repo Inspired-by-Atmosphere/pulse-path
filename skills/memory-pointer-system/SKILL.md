@@ -22,7 +22,7 @@ key = scheme://target | 摘要
 ```
 
 - `key`：英文小写下划线，全库唯一，稳定标识
-- `scheme`（10 类）：`skill` / `doc` / `viking` / `fact` / `script` / `cron` / `cfg` / `rule` / `env` / `mem`
+- `scheme`（11 类）：`skill` / `doc` / `viking` / `fact` / `script` / `cron` / `cfg` / `rule` / `env` / `mem` / `store`（`store://` = 外部记忆服务里的对象，只对接不 vendor，见 `docs/store-interop.md`）
 - `target`：可验证路径或标识
 - `| 摘要`：安全网，**≤40 字**（上限在 `mem_rules.json` 的 `summary.max_len`；超长=体检报 🔴「摘要过长: N 字 > 40」）
 - 验证态：`✓` 存在 / `✗` 断链 / `?` 未检——**mem_guard 维护，不手写**
@@ -46,7 +46,7 @@ key = scheme://target | 摘要
   - 🔴 人工决策级（涉及决策/逻辑链/需理解省略语义的复杂问题）→ 上报通知渠道
   - 🟡 自动修复级（明显/单一：大小写、路径分隔符、唯一近似匹配）→ 自动修 + 记报告，**不投递**
   - 🟢 正常 → **静默**（零输出 = 定时任务不投递；非空 stdout 才投递）
-- **验证分派**：`skill://`→查 skills/ 目录、`doc://`→查路径存在、`script://`→查 scripts/、`cfg://`/`env://`→查 .env 对应 key（大写）、`cron://`→查 `$HERMES_HOME/cron/jobs.json` 的 job id/名（库文件不存在报 ?）、`mem://`→查同文件内该 key 是否存在（跨指针引用完整性）、`rule://`→全量版再验（试点期报 ?）、viking/fact→全量版再验（试点期报 ?）
+- **验证分派**：`skill://`→查 skills/ 目录、`doc://`→查路径存在、`script://`→查 scripts/、`cfg://`/`env://`→查 .env 对应 key（大写）、`cron://`→查 `$HERMES_HOME/cron/jobs.json` 的 job id/名（库文件不存在报 ?）、`mem://`→查同文件内该 key 是否存在（跨指针引用完整性）、`rule://`→全量版再验（试点期报 ?）、viking/fact→全量版再验（试点期报 ?）、`store://`→跑规则表 `store.command` 拿退出码（0=命中 / 64=断链 / 65=服务不可用记 ?；command 空=未配置，全部记 ? 不报断链）
 - 报告落盘：`$HERMES_HOME/reports/mem_guard-report.md`（始终记录，可回溯）
 - **水位检查**：`check_watermark` 遍历 `mem_rules.json` 的 `watermark.files`，任一 ≥ `watermark.threshold` 就报 🔴 并**生成条目整理清单**（按 `§` 分段取首行，预览 15 条 + 总数）——调阈值/增监控文件纯声明式改规则表，引擎零改动
 - **退出码恒 0**：早期"red 级问题就 `exit 1`"导致定时任务误标 script failed/error（预警在 stdout 但被 failed 掩盖）。**问题经 stdout 传递**；`last_status=error` 从此不是"有预警"的标志，排查时别当设计解释
@@ -191,6 +191,7 @@ delegate 子代理模拟全新会话（只注入指针条目，无历史上下�
 - `scripts/check_l2_coverage.py`：摘要瘦身前的 L2 覆盖校验
 - `scripts/scan_ghost_script_refs.py`：幽灵引用扫描 v2（修正则 + 全盘二次确认）
 - `scripts/scan_archived_deps.py`：归档依赖扫描——哪些已归档/已删技能仍被活文件引用（`path:line` 列出，检测脚本恒 exit 0）
+- `scripts/pp_index.py`：**本地检索**——stdlib sqlite3 + FTS5 给指针目标建倒排（`--build/--search/--stats`，trigram 分词中文可搜、增量重建、`--selftest` 离线自测）
 - `scripts/stress_pointer_test.py`：弱模型下限压测——塞满上下文、指针藏中段、按 target 关键词判分（`--plan` 不联网先看载荷）
 - `scripts/project_registry.py`：项目注册——往规则表登记项目 + 往记忆文件插一条头指针（默认 dry-run，`--commit` 先备份再写、写后读回校验）
 - `references/ghost-scan-v2.md`：幽灵扫描基准拓扑 + 修正则 + 判定流程

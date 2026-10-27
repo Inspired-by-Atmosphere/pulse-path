@@ -147,7 +147,12 @@ def build_fixtures(sandbox):
     home = sandbox / "hermes"
     (home / "memories").mkdir(parents=True)
     (home / "skills" / "demo-skill").mkdir(parents=True)
-    (home / "skills" / "demo-skill" / "SKILL.md").write_text("# demo skill\n", encoding="utf-8")
+    # L2 body carries Chinese so pp_search's trigram index has something to find.
+    (home / "skills" / "demo-skill" / "SKILL.md").write_text(
+        "# demo skill\n\nagent 记忆指针体检夹具：本文件用于检索自测。\n", encoding="utf-8")
+    (home / "skills" / "demo-skill" / "references").mkdir(parents=True)
+    (home / "skills" / "demo-skill" / "references" / "notes.md").write_text(
+        "# notes\n\n参考条目：记忆指针与离线检索。\n", encoding="utf-8")
     (home / "memories" / "USER.md").write_text("small user memory\n", encoding="utf-8")
 
     dirty = home / "memories" / "MEMORY.md"
@@ -187,6 +192,7 @@ def main():
         env["PYTHONIOENCODING"] = "utf-8"
         env["PYTHONUTF8"] = "1"
         env.pop("MEM_GUARD_MEMORY", None)
+        env.pop("PP_INDEX_PATH", None)      # never reuse a real index from the host env
 
         client = Client(env)
 
@@ -217,8 +223,9 @@ def main():
         # ── 3. tools/list ───────────────────────────────────────────────
         tools = (listing.get("result") or {}).get("tools") or []
         names = [tool.get("name") for tool in tools]
-        expected = ["pp_guard_check", "pp_scan_links", "pp_l2_coverage", "pp_secrets_scan"]
-        check("tools/list: four tools with the expected names", names == expected, repr(names))
+        expected = ["pp_guard_check", "pp_scan_links", "pp_l2_coverage", "pp_secrets_scan",
+                    "pp_search"]
+        check("tools/list: five tools with the expected names", names == expected, repr(names))
         schemas_ok = all(
             (tool.get("inputSchema") or {}).get("type") == "object"
             and isinstance((tool.get("inputSchema") or {}).get("properties"), dict)
@@ -365,6 +372,54 @@ def main():
         check("pp_secrets_scan: default scan reports a verdict",
               (structured or {}).get("result") in ("CLEAN", "FINDINGS PRESENT"),
               repr((structured or {}).get("result")))
+
+        # ── 10b. pp_search: offline FTS5 search over L2 bodies ──────────
+        schema = tools[4].get("inputSchema") or {}
+        check("tools/list: pp_search takes query/limit/rebuild (query required)",
+              set(schema.get("properties") or {}) == {"query", "limit", "rebuild", "timeout_s"}
+              and schema.get("required") == ["query"], repr(schema)[:300])
+
+        # No index yet in this fresh HERMES_HOME: a typed error, not a crash.
+        result, structured, _ = tool_payload(client.call_tool("pp_search", {"query": "记忆指针"}))
+        structured = structured or {}
+        check("pp_search: missing index -> isError + status=index_missing",
+              result.get("isError") is True and structured.get("status") == "index_missing"
+              and (structured.get("error") or {}).get("kind") == "index_missing",
+              repr(structured)[:300])
+        check("pp_search: missing index carries a hint to rebuild",
+              "rebuild" in (structured.get("hint") or ""))
+
+        result, structured, _ = tool_payload(
+            client.call_tool("pp_search", {"query": "记忆指针", "rebuild": True}))
+        structured = structured or {}
+        hits = structured.get("hits") or []
+        check("pp_search: rebuild=true builds then searches (not an error)",
+              result.get("isError") is False and structured.get("status") == "searched"
+              and structured.get("rebuilt") is True, repr(structured)[:300])
+        check("pp_search: 中文查询命中 L2 正文（SKILL.md / references）",
+              len(hits) >= 1 and any(str(h.get("path", "")).endswith(".md") for h in hits),
+              repr(hits)[:300])
+        check("pp_search: every hit has path/score/snippet",
+              bool(hits) and all({"path", "score", "snippet"} <= set(h) for h in hits),
+              repr(hits)[:300])
+        check("pp_search: hits reverse-look-up the pointer key",
+              any(h.get("pointer_key") == "ok_skill" for h in hits), repr(hits)[:300])
+        check("pp_search: index snapshot carries docs/built_at/stale",
+              all(k in (structured.get("index") or {}) for k in ("docs", "built_at", "stale"))
+              and (structured.get("index") or {}).get("docs", 0) >= 1,
+              repr(structured.get("index"))[:300])
+        check("pp_search: keeps the raw engine report",
+              '"hits"' in (structured.get("raw_report") or ""))
+
+        # Zero hits is a result, not an error.
+        result, structured, _ = tool_payload(
+            client.call_tool("pp_search", {"query": "zzz绝不命中的词zzz"}))
+        structured = structured or {}
+        check("pp_search: no hit -> isError False, hits=[] and hits_total=0",
+              result.get("isError") is False and structured.get("hits") == []
+              and structured.get("hits_total") == 0, repr(structured)[:300])
+        check("pp_search: empty result carries an explanatory note",
+              bool(structured.get("note")))
 
         # ── 11. protocol-level error paths ─────────────────────────────
         rid, response = client.request("tools/call", {"name": "pp_nope", "arguments": {}})

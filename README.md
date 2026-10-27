@@ -43,13 +43,14 @@ pulse-path/
 │   └── run_checks.py                        # one entry point: every offline check
 ├── mcp_server/
 │   ├── pulse_path_mcp.py                    # stdio JSON-RPC MCP server (stdlib only)
-│   ├── test_mcp.py                          # 62-assertion protocol test (offline)
+│   ├── test_mcp.py                          # 76-assertion protocol test (offline)
 │   └── README.md
-├── docs/SANITIZE_LOG.md · docs/RESULTS.md
+├── docs/SANITIZE_LOG.md · docs/RESULTS.md · docs/store-interop.md
 ├── examples/
 │   ├── MEMORY.sample.md                     # a small pointer dictionary
 │   ├── mem_rules.sample.json                # rule-table starting point
 │   ├── facts_ssot.sample.json               # filled SSOT-reconciliation rules
+│   ├── mcp_client_example.py                # talk to an external MCP memory service
 │   └── quickstart.sh / quickstart.bat       # 60-second demo, safe from any cwd
 └── skills/
     ├── pulse-path/                          # methodology layer: the five laws
@@ -61,7 +62,8 @@ pulse-path/
     │   ├── references/{ghost-scan-v2.md, governance-engines.md}
     │   ├── scripts/{mem_guard,auditor,consolidator,curator,memory_request,
     │   │            check_l2_coverage,scan_ghost_script_refs,test_mem_guard,
-    │   │            scan_archived_deps,stress_pointer_test,project_registry}.py
+    │   │            scan_archived_deps,stress_pointer_test,project_registry,
+    │   │            pp_index}.py
     │   └── scripts/mem_rules.json           # declarative rule table (no business `if`s in engines)
     └── memory-governance/                   # governance layer: layering, demotion, write pipeline
         ├── SKILL.md
@@ -94,9 +96,49 @@ makes sense, and prints for humans unless you pass `--json`.
 | `scan_archived_deps.py` | Which archived skills are still referenced by live files? | always 0 |
 | `stress_pointer_test.py` | Under a stuffed context, can even a weak model still resolve a pointer correctly? | 0 pass / 1 fail / 2 setup error |
 | `project_registry.py` | Register a project and its one-line head pointer (dry-run by default). | 0 / 1 error |
-| `mcp_server/pulse_path_mcp.py` | The same checks as MCP tools over stdio, for any MCP client. | JSON-RPC |
+| `pp_index.py` | Which L2 document actually answers this question? Local FTS5 index over the pointer targets — no embeddings, no network. | 0 ok / 2 env error |
+| `mcp_server/pulse_path_mcp.py` | The guard, link scan, L2 coverage, secret scan and `pp_search` as MCP tools over stdio. | JSON-RPC |
 
 **Every check at once, offline:** `python scripts/run_checks.py` (this is what CI runs).
+
+### Finding the right L2 document (local, no LLM)
+
+`mem_guard` proves the graph is intact; `pp_index` answers *which* document to open. It builds a
+SQLite **FTS5** index over the pointer targets (`doc://` files, `skill://` SKILL.md + references) using
+only the standard library:
+
+```bash
+python skills/memory-pointer-system/scripts/pp_index.py --build
+python skills/memory-pointer-system/scripts/pp_index.py --search 悬空指针 --limit 3
+python skills/memory-pointer-system/scripts/pp_index.py --stats
+```
+
+Chinese works: the index uses the `trigram` tokenizer, and queries shorter than 3 characters fall back
+to `LIKE` with `mode: "like"` reported (never a silent degrade). Rebuilds are incremental by
+`(mtime, size)`. No embeddings, no network, no API key — the same query returns the same hits twice.
+
+### Pointing at an external memory service (`store://`)
+
+Semantic search belongs to a memory store, not to this repo. Instead of vendoring one
+(`basic-memory` is AGPL-3.0 with 30+ dependencies; `mem0` needs a vector DB plus an extraction LLM),
+a pointer can delegate its verdict to any external service:
+
+```json
+{
+  "store": {
+    "command": ["python", "examples/mcp_client_example.py", "--command", "npx -y graphmem", "--field", "id", "--probe", "{target}"],
+    "timeout": 20,
+    "exit_map": {"0": "ok", "64": "missing", "65": "unavailable"}
+  }
+}
+```
+
+An empty `command` means "not configured": every `store://` pointer is then reported as `?`, never as a
+broken link. Exit `0` ⇒ the object exists; `64` ⇒ the service says it does not (a real dangling
+pointer); `65`, a timeout or a failed launch ⇒ `?` — **an unavailable service is never reported as a
+broken pointer**. `examples/mcp_client_example.py` is a 119-line stdlib client that speaks MCP over
+stdio; `docs/store-interop.md` walks through connecting Graphmem, sqlite-graph-memory or Mem0 MCP
+without copying a line of their code.
 
 ## Quick start (60 seconds)
 
@@ -185,6 +227,7 @@ Every script resolves paths from environment variables with portable, personal-d
 | `ARCH_SCAN_ROOTS` | `scan_archived_deps.py` | `$HERMES_HOME` + cwd | default search roots (`os.pathsep`-separated) |
 | `PP_STRESS_BASE_URL` / `PP_STRESS_API_KEY` / `PP_STRESS_MODEL` | `stress_pointer_test.py` | *(unset)* | OpenAI-compatible endpoint, key, model for the weak-model probe |
 | `PULSE_PATH_MCP_TIMEOUT` | `mcp_server/pulse_path_mcp.py` | `120` (seconds) | per-tool-call timeout for the wrapped engines |
+| `PP_INDEX_PATH` | `pp_index.py` | `$HERMES_HOME/.pp_index/pp_index.sqlite` | index file (deleteable; rebuilt on demand) |
 | `DOCS_HOME` | `auditor.py` | `~/Documents` | where relative doc references are resolved |
 
 `mem_rules.json` may reference paths as `~`, `$VAR`, or relative to `HERMES_HOME`.
@@ -199,11 +242,13 @@ Windows 11, Python 3.14.9, one laptop. Reproduce everything with `python scripts
 
 | Measurement | Value |
 |---|---|
-| Offline checks in `run_checks.py` | **9/9 pass** |
-| Assertions across the suites | 47 unit + 20 + 27 + 37 + 26 + 34 (engine selftests) + 62 (MCP protocol) |
+| Offline checks in `run_checks.py` | **11/11 pass** |
+| Assertions across all suites | **322** (62 unit + 20 + 27 + 37 + 26 + 34 + 35 + 5 engine/example selftests + 76 MCP protocol) |
 | The repo's own secret scan | `CLEAN` |
 | The repo's own link-integrity scan | `0` dangling references |
 | `mem_guard.py --check` (5-pointer fixture) | ~0.37 s |
+| `pp_index.py --build` (19 markdown files) | ~0.06 s, 156 KB of body text |
+| `pp_index.py --search` (per CLI call) | ~0.5 s — the FTS query itself is ~1 ms, Python startup dominates |
 | `scan_link_graph.py` (whole repo) | ~0.59 s |
 | `scan_links.py` (repo skills) | ~0.60 s |
 | MCP `initialize` + one `tools/call` | ~0.65 s round trip |
@@ -237,15 +282,17 @@ api       = cfg://SERVICE_API_KEY | 取值见 .env，勿写入记忆正文
   (A previous revision shipped a stale limit and its own test suite consequently failed 1/25.)
 - **Windows / git-bash note:** run the scripts with `python`, and pass native paths (`<DRIVE>:/path/to/script.py`)
   rather than MSYS paths (`/c/...`) — MSYS path translation is commonly disabled.
-- **Nothing here retrieves memory.** There is no embedding, index or vector store: a pointer is
-  resolved by the host agent, which reads the summary line and opens the target itself. This repo
-  validates the *graph*, not the retrieval — it complements a memory store, it does not replace one.
+- **Retrieval is lexical, not semantic.** `pp_index` is SQLite FTS5 over the pointer targets: it finds
+  documents by word/trigram overlap, not by meaning. Semantic recall is deliberately delegated to an
+  external MCP memory service (`store://`), so this repo never has to maintain an embedding pipeline.
 - **The weak-model probe needs a model.** `stress_pointer_test.py` speaks the OpenAI-compatible
   `/chat/completions` protocol; with no endpoint configured it can only render the prompt (`--plan`).
   It shows that a weak model *can* still resolve a pointer — not that yours will.
 - **The MCP server is a thin wrapper.** It parses the engines' human-readable reports; if a report
   format changes the wrapper degrades (raw text kept, warning attached) instead of inventing a
-  result. Every tool is read-only and calls `--check`.
+  result. Every tool is read-only towards your repo and memory store; `pp_search` with `rebuild: true`
+  does write its own throwaway cache under `$HERMES_HOME/.pp_index/`, which is stated in the tool
+  description.
 
 ## Provenance
 

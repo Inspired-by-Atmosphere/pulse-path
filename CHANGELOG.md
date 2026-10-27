@@ -2,6 +2,45 @@
 
 All notable changes to this repository. Format loosely follows Keep a Changelog.
 
+## [0.3.0] - 2026-10-27 — local retrieval (FTS5) and "borrow, don't vendor" interop
+
+Both items exist because the project had no retrieval at all: pointers were verified but the *choice*
+of which L2 document to open was left entirely to the host model.
+
+### Added
+- `skills/memory-pointer-system/scripts/pp_index.py` — zero-dependency retrieval over the pointer
+  targets, built on stdlib `sqlite3` + **FTS5**: `--build` (incremental by `(mtime, size)`),
+  `--rebuild`, `--search Q [--limit N] [--json]`, `--stats`, `--index-dir`. Uses the `trigram`
+  tokenizer so Chinese substrings match; queries under 3 characters fall back to `LIKE` and say
+  `mode: "like"` instead of silently degrading. Hits carry `path`, `score`, `snippet` and — when the
+  file is a pointer target — the originating `pointer_key`. `--selftest`: 35 assertions.
+- MCP `pp_search` tool on the existing server (`{query, limit?, rebuild?, timeout_s?}`), returning
+  `{query, mode, hits[], hits_total, index{docs, built_at, stale}}`. `mcp_server/test_mcp.py` is now
+  76 assertions.
+- `store://` scheme — a pointer can delegate its verdict to an external memory service instead of this
+  repo storing anything. Declarative and off by default: `mem_rules.json` → `store.command` (empty =
+  not configured ⇒ every `store://` is `?`, never a false dangling link), `timeout`, `exit_map`.
+  Exit `64` ⇒ real missing object; `65`, timeout or failed launch ⇒ `?` (an unavailable service is not
+  a broken pointer). `schemes` is now 11; `test_mem_guard.py` is 62 assertions.
+- `examples/mcp_client_example.py` — 119-line stdlib MCP client over stdio: `--command / --tool /
+  --args / --field / --probe`, exit 0 / 64 / 65 matching `exit_map`; `--selftest` drives the repo's own
+  MCP server (5 assertions).
+- `docs/store-interop.md` — why these projects are not vendored (basic-memory is AGPL-3.0 with 30+
+  dependencies; mem0 needs a vector DB plus an extraction LLM), how to configure `store://`, and how to
+  connect Graphmem / sqlite-graph-memory / Mem0 MCP as external processes. No copied code.
+
+### Fixed
+- **`scripts/run_checks.py` was not hermetic.** The link-integrity step inherited the developer's
+  `HERMES_HOME`, so on a clean machine (i.e. CI) `SKILLS_ROOT` pointed at a non-existent directory and
+  every `skill://` reference failed. The step now pins `SKILLS_ROOT`/`SCAN_DIRS` to the repository's own
+  `skills/`. Verified by running with `HERMES_HOME` unset: 11/11.
+
+### Changed
+- READMEs: `pp_index` and `store://` sections, `PP_INDEX_PATH`, updated results table (11/11 checks,
+  322 assertions), and the retrieval limitation restated honestly — **lexical, not semantic**.
+- `docs/RESULTS.md`: assertion table and self-scan rows refreshed; the two remaining link-graph ghosts
+  are named and explained instead of being suppressed.
+
 ## [0.2.0] - 2026-10-27 — closing the doc-vs-code gap, CI, and two ported engines
 
 ### Added

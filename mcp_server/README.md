@@ -1,12 +1,14 @@
 # pulse-path MCP server
 
-Expose the repository's four read-only health / lint engines to any MCP client
-(Claude Desktop, Claude Code, or your own agent) over stdio.
+Expose the repository's read-only health / lint engines — plus an offline full-text
+search over pointer L2 bodies — to any MCP client (Claude Desktop, Claude Code, or
+your own agent) over stdio.
 
 - **Zero dependencies** — standard-library Python only (no `mcp`, no `fastmcp`, no
-  `pydantic`). Nothing to `pip install`.
+  `pydantic`). Nothing to `pip install`. Search uses the stdlib `sqlite3` + FTS5.
 - **Read-only and idempotent** — every tool inspects, none of them writes to the
-  repo or to the memory store. `mem_guard` always runs with `--check`.
+  repo or to the memory store. `mem_guard` always runs with `--check`. The one file
+  any tool touches is `pp_index.py`'s own disposable index cache (see below).
 - **Self-contained** — the server locates the repo from `__file__`, so it starts
   from any working directory.
 
@@ -26,6 +28,7 @@ Files:
 | `pp_scan_links` | `skills/pulse-path/scripts/scan_links.py` | `dirs[]?`, `timeout_s?` | `errors_total`, `clean`, per-directory `dangling_paths[]` / `dead_skill_refs[]` / `fact_refs`, `findings_truncated` |
 | `pp_l2_coverage` | `skills/memory-pointer-system/scripts/check_l2_coverage.py` | `memory_file?`, `timeout_s?` | `entries[]` (`key`, `scheme`, `summary_chars`, `l2_chars`, `missing_at_L2[]`), `missing_at_L2[]`, `clean` |
 | `pp_secrets_scan` | `scripts/check_secrets.py --json` | `path?`, `timeout_s?` | `total_findings`, `clean`, `result` (`CLEAN` / `FINDINGS PRESENT`), masked `findings[]` |
+| `pp_search` | `skills/memory-pointer-system/scripts/pp_index.py --search --json` | `query`, `limit?`, `rebuild?`, `timeout_s?` | `hits[]` (`path`, `score`, `snippet`, `pointer_key?`), `hits_total`, `mode` (`fts` / `like`), `index` (`docs`, `built_at`, `stale`), `raw_report` |
 
 Path arguments may be absolute, or relative to the repo root; `~`, `$HERMES_HOME`
 and `%VAR%` are expanded. Omitted paths fall back to the engine defaults
@@ -35,6 +38,25 @@ Findings are **results, not errors**: `isError` is only `true` when the engine
 could not run (missing script, timeout, non-zero-with-garbage-output, missing
 input file). `clean: false` is a normal, successful call.
 
+`pp_search` searches the L2 bodies behind the pointer dictionary — the files
+`doc://` points at plus `SKILL.md` and `references/*.md` of every `skill://`
+target — through an SQLite FTS5 index with the `trigram` tokenizer, so Chinese and
+English substrings both match. Notes:
+
+- **`rebuild: true` writes only its own cache.** `pp_index.py` stores the index at
+  `$HERMES_HOME/.pp_index/pp_index.sqlite` (override with `PP_INDEX_PATH`), never in
+  the repo and never in the memory store. The file is disposable: delete it and the
+  next `rebuild: true` recreates it. Without `rebuild` the tool never writes anything
+  and answers `status: "index_missing"` when no index exists yet.
+- **Updates are incremental.** A rebuild skips files whose mtime and size are
+  unchanged, so calling with `rebuild: true` on every query stays cheap.
+- **Queries under 3 characters** cannot be matched by a trigram index, so the engine
+  falls back to a `LIKE` scan and says `mode: "like"`. Zero hits is a successful call
+  with `hits: []` — not an error.
+- **`index.stale: true`** means a file changed after the index was built; call again
+  with `rebuild: true` to refresh it. Hits always carry `pointer_key` when the file is
+  reachable from a pointer (reverse lookup through the pointer table).
+
 ## Run it
 
 ```bash
@@ -42,7 +64,7 @@ python mcp_server/pulse_path_mcp.py                 # speak JSON-RPC on stdio
 python mcp_server/pulse_path_mcp.py --help          # human help, serves nothing
 python mcp_server/pulse_path_mcp.py --print-tools   # dump tool schemas
 python mcp_server/pulse_path_mcp.py --version
-python mcp_server/test_mcp.py                       # -> MCP TEST OK 62/62
+python mcp_server/test_mcp.py                       # -> MCP TEST OK 76/76
 ```
 
 Use `python3` instead of `python` where that is the interpreter name. On Windows
@@ -128,8 +150,10 @@ the stream.
 | Variable | Effect |
 | --- | --- |
 | `PULSE_PATH_MCP_TIMEOUT` | per-engine timeout in seconds (default `120`, clamped to 1–600) |
-| `HERMES_HOME` | memory store root the engines use by default (`memories/`, `skills/`, `reports/`) |
+| `HERMES_HOME` | memory store root the engines use by default (`memories/`, `skills/`, `reports/`, `.pp_index/`) |
 | `MEM_GUARD_*`, `SKILLS_ROOT`, `VIKING_ROOT` | passed straight through to the engines |
+| `PP_INDEX_PATH` | where `pp_search` keeps its FTS5 index (default `$HERMES_HOME/.pp_index/pp_index.sqlite`) |
+| `PP_INDEX_MEMORY` / `PP_INDEX_SKILLS` | pointer file and `skill://` search roots used when the index is built |
 
 Every tool also accepts `timeout_s` for a single call. Set these in the client's
 `env` block; the server inherits its own environment and passes it to the engines
@@ -173,16 +197,19 @@ unchanged.
 ## Self-test
 
 `test_mcp.py` builds a throwaway `HERMES_HOME` in a temp directory (one resolvable
-pointer, one deliberately dangling pointer, a clean and a dirty directory), spawns
+pointer, one deliberately dangling pointer, a clean and a dirty directory, and a
+small skill whose `SKILL.md` plus one file under its `references/` directory carry
+Chinese text), spawns
 the server as a real child process, and drives the full MCP handshake plus every
 tool over raw pipes:
 
 ```bash
 python mcp_server/test_mcp.py
-MCP TEST OK 62/62
+MCP TEST OK 76/76
 ```
 
 It asserts the handshake fields, notification silence, tool schemas, parsed
-guard/scan/L2/secrets payloads, protocol error codes, the `Content-Length`
-reader fallback, the `script_missing` branch and the report parser — offline, no
-MCP client library, no real memory store.
+guard/scan/L2/secrets payloads, the `pp_search` path (index_missing before a build,
+`rebuild: true` producing hits with `pointer_key`, `hits: []` for zero matches),
+protocol error codes, the `Content-Length` reader fallback, the `script_missing`
+branch and the report parser — offline, no MCP client library, no real memory store.

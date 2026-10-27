@@ -18,11 +18,14 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# (显示名, 命令参数列表)；命令一律用 sys.executable 起，避免解释器不一致
+# (显示名, 命令参数列表, 额外环境变量)；命令一律用 sys.executable 起，避免解释器不一致
+# 额外环境变量是为了让检查**与环境无关**：链完整性必须对着仓库自己的 skills 解析 skill://，
+# 否则在干净机器（CI）上 HERMES_HOME 缺省 → SKILLS_ROOT 指向不存在的目录 → 假失败。
 STEPS = [
-    ("单元测试 mem_guard", ["skills/memory-pointer-system/scripts/test_mem_guard.py"]),
-    ("发布前敏感扫描", ["scripts/check_secrets.py", "."]),
-    ("链完整性自检", ["skills/pulse-path/scripts/scan_links.py", "skills"]),
+    ("单元测试 mem_guard", ["skills/memory-pointer-system/scripts/test_mem_guard.py"], {}),
+    ("发布前敏感扫描", ["scripts/check_secrets.py", "."], {}),
+    ("链完整性自检", ["skills/pulse-path/scripts/scan_links.py", "skills"],
+     {"SKILLS_ROOT": os.path.join(ROOT, "skills"), "SCAN_DIRS": os.path.join(ROOT, "skills")}),
 ]
 
 # 带 --selftest 的脚本（离线夹具，不联网、不需要任何 key）
@@ -32,6 +35,8 @@ SELFTESTS = [
     "skills/memory-pointer-system/scripts/stress_pointer_test.py",
     "skills/memory-governance/scripts/ssot_check.py",
     "skills/memory-pointer-system/scripts/project_registry.py",
+    "skills/memory-pointer-system/scripts/pp_index.py",
+    "examples/mcp_client_example.py",
 ]
 
 # MCP 自测（不联网，spawn 本地子进程走 JSON-RPC）
@@ -47,11 +52,14 @@ def _env():
     return e
 
 
-def run(name, args):
+def run(name, args, extra_env=None):
     cmd = [sys.executable] + args
+    env = _env()
+    if extra_env:
+        env.update(extra_env)
     print("\n=== %s ===\n$ %s" % (name, " ".join(args)))
     try:
-        p = subprocess.run(cmd, cwd=ROOT, env=_env(), capture_output=True,
+        p = subprocess.run(cmd, cwd=ROOT, env=env, capture_output=True,
                            text=True, encoding="utf-8", errors="replace", timeout=600)
     except subprocess.TimeoutExpired:
         print("TIMEOUT (600s)")
@@ -75,11 +83,11 @@ def main():
     steps = list(STEPS)
     for rel in SELFTESTS:
         if os.path.exists(os.path.join(ROOT, rel)):
-            steps.append(("%s --selftest" % os.path.basename(rel), [rel, "--selftest"]))
+            steps.append(("%s --selftest" % os.path.basename(rel), [rel, "--selftest"], {}))
         else:
             print("[skip] 未找到（尚未实现）: %s" % rel)
     if os.path.exists(os.path.join(ROOT, MCP_TEST)):
-        steps.append(("MCP 协议自测", [MCP_TEST]))
+        steps.append(("MCP 协议自测", [MCP_TEST], {}))
 
     if args.discover:
         for sub in ("skills", "scripts", "mcp_server"):
@@ -96,17 +104,17 @@ def main():
                     except OSError:
                         continue
                     if "--selftest" in txt and "selftest" not in rel:
-                        steps.append(("%s --selftest" % f, [rel, "--selftest"]))
+                        steps.append(("%s --selftest" % f, [rel, "--selftest"], {}))
 
     print("pulse-path 自检 —— 共 %d 步" % len(steps))
-    for i, (name, cmd) in enumerate(steps, 1):
+    for i, (name, cmd, _env_extra) in enumerate(steps, 1):
         print("  %d) %-42s %s" % (i, name, " ".join(cmd)))
     if args.list:
         return 0
 
     results = []
-    for name, cmd in steps:
-        ok, _out = run(name, cmd)
+    for name, cmd, env_extra in steps:
+        ok, _out = run(name, cmd, env_extra)
         results.append((name, ok))
 
     print("\n" + "=" * 60)

@@ -36,13 +36,14 @@ pulse-path/
 │   └── run_checks.py                        # 统一自检入口（离线跑全部检查）
 ├── mcp_server/
 │   ├── pulse_path_mcp.py                    # stdio JSON-RPC MCP server（纯标准库）
-│   ├── test_mcp.py                          # 62 条协议断言（离线）
+│   ├── test_mcp.py                          # 76 条协议断言（离线）
 │   └── README.md
-├── docs/SANITIZE_LOG.md · docs/RESULTS.md
+├── docs/SANITIZE_LOG.md · docs/RESULTS.md · docs/store-interop.md
 ├── examples/
 │   ├── MEMORY.sample.md                     # 一份可跑的指针字典样例
 │   ├── mem_rules.sample.json                # 规则表起点
 │   ├── facts_ssot.sample.json               # 填好的口径对账规则示例
+│   ├── mcp_client_example.py                # 零依赖示范：对接外部 MCP 记忆服务
 │   └── quickstart.sh / quickstart.bat       # 60 秒演示，任意 cwd 可跑
 └── skills/
     ├── pulse-path/                          # 方法论层：链表五律
@@ -54,7 +55,8 @@ pulse-path/
     │   ├── references/{ghost-scan-v2.md, governance-engines.md}
     │   ├── scripts/{mem_guard,auditor,consolidator,curator,memory_request,
     │   │            check_l2_coverage,scan_ghost_script_refs,test_mem_guard,
-    │   │            scan_archived_deps,stress_pointer_test,project_registry}.py
+    │   │            scan_archived_deps,stress_pointer_test,project_registry,
+    │   │            pp_index}.py
     │   └── scripts/mem_rules.json           # 声明式规则表（引擎零业务 if）
     └── memory-governance/                   # 治理层：分层、拨层、写入流程
         ├── SKILL.md
@@ -86,9 +88,44 @@ pulse-path/
 | `scan_archived_deps.py` | 哪些已归档技能仍被活文件引用？ | 恒 0 |
 | `stress_pointer_test.py` | 上下文塞满时，弱模型还能正确解析指针吗？ | 0 通过 / 1 判分失败 / 2 环境错误 |
 | `project_registry.py` | 注册项目 + 它的那条头指针（默认 dry-run）。 | 0 / 1 |
-| `mcp_server/pulse_path_mcp.py` | 把上面这些检查暴露为 MCP tools（stdio）。 | JSON-RPC |
+| `pp_index.py` | **该打开哪篇 L2 文档？** 本地 FTS5 索指针目标——无 embedding、不联网。 | 0 正常 / 2 环境错误 |
+| `mcp_server/pulse_path_mcp.py` | 体检/链扫/L2 覆盖/敏感扫描 + `pp_search`，全部作为 MCP tools（stdio）。 | JSON-RPC |
 
 **一次跑完全部检查（离线）**：`python scripts/run_checks.py` —— CI 跑的就是它。
+
+### 本地查文档（不花 LLM）
+
+`mem_guard` 证明链没断，`pp_index` 回答**该打开哪一篇**：用标准库 `sqlite3` 的 **FTS5** 给指针目标
+（`doc://` 文件、`skill://` 的 SKILL.md + references）建倒排索引。
+
+```bash
+python skills/memory-pointer-system/scripts/pp_index.py --build
+python skills/memory-pointer-system/scripts/pp_index.py --search 悬空指针 --limit 3
+python skills/memory-pointer-system/scripts/pp_index.py --stats
+```
+
+中文可用（`trigram` 分词）；不足 3 字的查询回退 `LIKE` 并显式报 `mode: "like"`（不静默降级）。
+增量按 `(mtime, size)` 跳过未变文件。无 embedding、不联网、不要 key——同一个查询两次结果一致。
+
+### 指向外部记忆服务（`store://`）
+
+语义检索属于记忆库，不属于本仓。与其 vendor 一个（`basic-memory` 是 AGPL-3.0 + 30 多个依赖；
+`mem0` 要向量库 + 抽取 LLM），不如让指针把判定权交给外部服务：
+
+```json
+{
+  "store": {
+    "command": ["python", "examples/mcp_client_example.py", "--command", "npx -y graphmem", "--field", "id", "--probe", "{target}"],
+    "timeout": 20,
+    "exit_map": {"0": "ok", "64": "missing", "65": "unavailable"}
+  }
+}
+```
+
+`command` 为空数组 = 未配置：所有 `store://` 指针一律记 `?`，绝不报断链。退出码 `0` ⇒ 存在；
+`64` ⇒ 外部明确回答“没有”（真断链）；`65`/超时/启动失败 ⇒ `?`——**服务不可用不等于指针错**。
+`examples/mcp_client_example.py` 是 119 行的零依赖 MCP stdio 客户端；
+`docs/store-interop.md` 写了怎么接 Graphmem / sqlite-graph-memory / Mem0 MCP，**一行代码都不用拷**。
 
 ## 快速上手（60 秒）/ Quick start
 
@@ -171,6 +208,7 @@ python skills/memory-pointer-system/scripts/test_mem_guard.py     # 自包含单
 | `ARCH_SCAN_ROOTS` | `scan_archived_deps.py` | `$HERMES_HOME` + 当前目录 | 默认扫描根（`os.pathsep` 分隔） |
 | `PP_STRESS_BASE_URL` / `PP_STRESS_API_KEY` / `PP_STRESS_MODEL` | `stress_pointer_test.py` | 未设置 | 弱模型压测用的 OpenAI 兼容端点/密钥/模型名 |
 | `PULSE_PATH_MCP_TIMEOUT` | `mcp_server/pulse_path_mcp.py` | `120`（秒） | 单次被包装引擎调用超时 |
+| `PP_INDEX_PATH` | `pp_index.py` | `$HERMES_HOME/.pp_index/pp_index.sqlite` | 索引文件（可随时删，重建即可） |
 | `DOCS_HOME` | `auditor.py` | `~/Documents` | 相对文档引用的解析根 |
 
 `mem_rules.json` 里的路径支持 `~`、`$VAR`，或相对 `HERMES_HOME` 的相对路径。
@@ -184,11 +222,13 @@ Windows 11、Python 3.14.9、单台笔记本；用 `python scripts/run_checks.py
 
 | 指标 | 值 |
 |---|---|
-| `run_checks.py` 里的离线检查 | **9/9 通过** |
-| 各类断言合计 | 47（单测）+ 20 + 27 + 37 + 26 + 34（引擎 selftest）+ 62（MCP 协议） |
+| `run_checks.py` 里的离线检查 | **11/11 通过** |
+| 各类断言合计 | **322**（62 单测 + 20 + 27 + 37 + 26 + 34 + 35 + 5 引擎/示例 selftest + 76 MCP 协议） |
 | 本仓自身敏感扫描 | `CLEAN` |
 | 本仓自身链完整性 | `0` 条悬空引用 |
 | `mem_guard.py --check`（5 条指针夹具） | ≈0.37 s |
+| `pp_index.py --build`（19 篇 markdown） | ≈0.06 s，正文 156 KB |
+| `pp_index.py --search`（每次 CLI 调用） | ≈0.5 s —— FTS 查询本身约 1 ms，其余是 Python 启动 |
 | `scan_link_graph.py`（整仓） | ≈0.59 s |
 | `scan_links.py`（仓库 skills） | ≈0.60 s |
 | MCP `initialize` + 一次 `tools/call` | ≈0.65 s 往返 |
@@ -218,12 +258,13 @@ api       = cfg://SERVICE_API_KEY | 取值见 .env，勿写入记忆正文
   否则百分比失真（上一版就因未同步导致自带测试 1/25 失败）。
 - **Windows / git-bash 提示**：脚本用 `python` 跑，路径请传原生形式（`<盘符>:/路径/script.py`）而非 MSYS 形式
   （`/c/...`）——MSYS 路径转换通常是关闭的。
-- **这里不做检索**：没有 embedding、没有索引、没有向量库；指针由宿主 agent 自己解析（读摘要行、打开 target）。
-  本仓校验的是**链图**，不是检索——它补记忆库，不替记忆库。
+- **检索是词法的，不是语义的**：`pp_index` 是 SQLite FTS5 对指针目标建倒排——按词/三元组重合找，
+  不按意思找。语义召回**故意**交给外部 MCP 记忆服务（`store://`），本仓不维护 embedding 管线。
 - **弱模型压测需要模型**：`stress_pointer_test.py` 走 OpenAI 兼容的 `/chat/completions`；没配端点时只能
   `--plan` 打印将发送的内容。它证明的是“弱模型**也能**解析指针”，不是“你的模型一定会”。
 - **MCP server 是薄包装**：它解析引擎的人读报告；报告格式变了就降级（保留原文 + 附警告），不编结论。
-  所有 tool 只读、只调 `--check`。
+  对仓库与记忆库只读；`pp_search` 带 `rebuild: true` 时会写自己的临时缓存
+  `$HERMES_HOME/.pp_index/`（工具描述里已写明）。
 
 ## 出处 / Provenance
 

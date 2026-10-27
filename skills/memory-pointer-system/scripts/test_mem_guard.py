@@ -209,13 +209,81 @@ def test_cron_mem():
     check("mem 断链消息 = 未定义的指针别名", mem_detail == "未定义的指针别名")
 
     rules = mg.load_rules()
-    check("schemes 共 10 种", len(rules["schemes"]) == 10)
+    check("schemes 共 11 种", len(rules["schemes"]) == 11)
     check("cron/mem 声明为 red 级",
           rules["schemes"]["cron"]["report"] == "red"
           and rules["schemes"]["mem"]["report"] == "red")
     check("verify 名为 cron_id / mem_key",
           rules["schemes"]["cron"]["verify"] == "cron_id"
           and rules["schemes"]["mem"]["verify"] == "mem_key")
+
+
+def _store_rules(command, timeout=20):
+    """把带 store 段的规则表写进沙箱并切过去（调用方负责还原 RULES_FILE）。"""
+    path = os.path.join(SANDBOX, "rules_store.json")
+    io.open(path, "w", encoding="utf-8").write(json.dumps(
+        {"store": {"command": command, "timeout": timeout,
+                   "exit_map": {"0": "ok", "64": "missing", "65": "unavailable"}}},
+        ensure_ascii=False))
+    mg.RULES_FILE = path
+
+
+def test_store_ref():
+    print("\n== ⑫ store:// 外部记忆服务（只对接不 vendor）==")
+    old = mg.RULES_FILE
+    try:
+        # 未配置 command → 绝不报断链
+        _store_rules([])
+        unset, why = mg.v_store_ref("any-object")
+        check("store 未配置 command → None（? 待全量版）", unset is None)
+        check("未配置消息说明原因", "command" in why)
+
+        # exit 0 → 命中
+        _store_rules([sys.executable, "-c", "import sys; sys.exit(0)"])
+        hit, _ = mg.v_store_ref("any-object")
+        check("store 退出码 0 → 正常", hit is True)
+
+        # exit 64 → 断链，消息点明是外部 store 报未找到
+        _store_rules([sys.executable, "-c", "import sys; sys.exit(64)"])
+        miss, mdetail = mg.v_store_ref("gone")
+        check("store 退出码 64 → 断链（False）", miss is False)
+        check("断链消息说明外部 store 未找到", "未找到" in mdetail)
+
+        # exit 65 → 服务不可用，不报断链
+        _store_rules([sys.executable, "-c", "import sys; sys.exit(65)"])
+        down, ddetail = mg.v_store_ref("gone")
+        check("store 退出码 65 → None（不报断链）", down is None)
+        check("不可用消息说明服务不可用", "不可用" in ddetail)
+
+        # 超时 → ? 带原因
+        _store_rules([sys.executable, "-c", "import time; time.sleep(5)"], timeout=1)
+        tmo, tdetail = mg.v_store_ref("slow")
+        check("store 超时 → None（不报断链）", tmo is None)
+        check("超时消息带原因", "超时" in tdetail)
+
+        # {target} 占位符：替换而不是追加
+        placeholder = [sys.executable, "-c",
+                       "import sys; sys.exit(0 if sys.argv[1] == 'good' else 64)", "{target}"]
+        _store_rules(placeholder)
+        check("占位符命中 → 正常", mg.v_store_ref("good")[0] is True)
+        check("占位符未命中 → 断链", mg.v_store_ref("bad")[0] is False)
+
+        # 无占位符：target 追加到末尾（命令不读也不该误判）
+        _store_rules([sys.executable, "-c", "import sys; sys.exit(0)"])
+        check("无占位符时追加 target → 正常", mg.v_store_ref("appended")[0] is True)
+
+        # 启动失败 → ? 带原因
+        _store_rules(["definitely-not-a-real-command-xyz"])
+        launch, ldetail = mg.v_store_ref("any-object")
+        check("store 启动失败 → None（不报断链）", launch is None)
+        check("启动失败消息带原因", "启动失败" in ldetail)
+
+        # 规则表中的 $VAR 会展开（不经 shell，引擎自己展开）
+        os.environ["PP_STORE_TEST_PY"] = sys.executable
+        _store_rules(["$PP_STORE_TEST_PY", "-c", "import sys; sys.exit(0)"])
+        check("store 命令里的 $VAR 会展开", mg.v_store_ref("any-object")[0] is True)
+    finally:
+        mg.RULES_FILE = old
 
 
 def test_summary_in_report():
@@ -258,6 +326,7 @@ if __name__ == "__main__":
         test_paths_tolerance()
         test_summary()
         test_cron_mem()
+        test_store_ref()
         test_summary_in_report()
     finally:
         shutil.rmtree(SANDBOX, ignore_errors=True)

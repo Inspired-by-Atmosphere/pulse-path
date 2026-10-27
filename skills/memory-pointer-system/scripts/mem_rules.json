@@ -61,6 +61,21 @@
       "verify": "mem_key",
       "autofix": [],
       "report": "red"
+    },
+    "store": {
+      "verify": "store_ref",
+      "autofix": [],
+      "report": "red"
+    }
+  },
+  "store": {
+    "_comment": "外部记忆服务对接（只对接不 vendor，本仓不装任何记忆库依赖）：store:// 指针由外部 MCP 服务判定对象是否存在。command=要执行的命令数组，空数组=未配置（store:// 一律记 ? 待全量版，绝不报断链）；命令元素里含 {target} 占位符则替换成指针 target，否则把 target 追加到末尾。exit_map=退出码→结论：ok=命中 / missing=🔴断链（服务明确回答没有这个对象）/ unavailable=不报断链、记 ? 待确认（服务不可用不等于指针错）。timeout=单次判定超时秒数（超时也记 ?）。可复制示例与接入步骤见 docs/store-interop.md。",
+    "command": [],
+    "timeout": 20,
+    "exit_map": {
+      "0": "ok",
+      "64": "missing",
+      "65": "unavailable"
     }
   },
   "damage": {

@@ -20,6 +20,12 @@ v2 架构（2026-08-19 用户拍板"规则表+单引擎"，替代 v1 打补丁�
     加新验证器     → 引擎注册表加 1 个纯函数（校验规则数据化，引擎无业务 if）
     加新问题检测   → damage.detect 加 1 条
 
+scheme 清单（11 种，全部由 mem_rules.json 声明）:
+    skill:// doc:// script:// cfg:// env:// viking:// fact:// rule:// cron:// mem://
+    store://   外部记忆服务里的对象——只对接不 vendor：存储与语义检索都交给外部
+               MCP 服务，本引擎只按退出码判定“还有没有这个对象”。command 未配置
+               时一律记 ? 待全量版（绝不报断链），外部服务不可用也记 ? 不报断链。
+
 用法:
     python mem_guard.py             # 体检 + 自动修复 + 报告（cron 模式）
     python mem_guard.py --check     # 只体检不写回（dry-run）
@@ -29,6 +35,7 @@ import io
 import json
 import os
 import re
+import subprocess
 import sys
 
 # ── 路径配置 ──
@@ -90,7 +97,11 @@ DEFAULT_RULES = {
         "rule": {"verify": "rule_doc", "autofix": [], "report": "pending"},
         "cron": {"verify": "cron_id", "autofix": [], "report": "red"},
         "mem": {"verify": "mem_key", "autofix": [], "report": "red"},
+        "store": {"verify": "store_ref", "autofix": [], "report": "red"},
     },
+    # 外部记忆服务对接：command 空 = 未配置（store:// 一律记 ? 待全量版）
+    "store": {"command": [], "timeout": 20,
+              "exit_map": {"0": "ok", "64": "missing", "65": "unavailable"}},
     "damage": {"detect": ["pointer_mangled", "dup_key"], "action": "red"},
     "content_scans": {},
     "watermark": {"enabled": True, "threshold": 85, "action": "report_list"},
@@ -243,10 +254,57 @@ def v_mem_key(target):
     return False, "未定义的指针别名"
 
 
+def v_store_ref(target):
+    """store://<外部记忆对象 id> → 由外部记忆服务判定，本仓只读退出码（只对接不 vendor）。
+
+    command 从规则表 store 段读（空数组 = 未配置 → None，记 ? 待全量版，绝不报断链）。
+    命令里含 {target} 占位符就替换，否则把 target 追加到末尾。
+    退出码按 store.exit_map 解释：
+        ok           → 存在
+        missing      → 断链（外部服务明确回答"没有这个对象"）
+        unavailable  → None（服务不可用不等于指针错，记 ? 待确认）
+    超时/启动失败 → None，消息带原因。
+    """
+    cfg = load_rules().get("store") or {}
+    command = cfg.get("command") or []
+    if isinstance(command, str):          # 允许写成一行字符串（按空格切）
+        command = command.split()
+    if not command:
+        return None, "store 未配置 command（待全量版）"
+
+    # 与其他路径字段口径一致：支持 ~ 与 $VAR（不经 shell，故在这里展开）；
+    # 展开后再替换 {target}，避免目标里的 $ 被当变量二次展开。
+    argv = [os.path.expandvars(os.path.expanduser(str(x))) for x in command]
+    if any("{target}" in a for a in argv):
+        argv = [a.replace("{target}", target) for a in argv]
+    else:
+        argv.append(target)
+
+    timeout = cfg.get("timeout") or 20
+    exit_map = cfg.get("exit_map") or {"0": "ok", "64": "missing", "65": "unavailable"}
+    try:
+        proc = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE, timeout=float(timeout))
+    except subprocess.TimeoutExpired:
+        return None, f"外部 store 超时（>{timeout}s），按待确认处理"
+    except (OSError, ValueError) as e:
+        return None, f"外部 store 启动失败: {e}"
+
+    verdict = exit_map.get(str(proc.returncode))
+    if verdict == "ok":
+        return True, "外部 store 命中"
+    if verdict == "missing":
+        return False, f"外部 store 报未找到（exit {proc.returncode}）"
+    if verdict == "unavailable":
+        return None, f"外部 store 不可用（exit {proc.returncode}）"
+    return None, f"外部 store 返回未登记退出码 {proc.returncode}"
+
+
 VERIFIERS = {
     "skill_dir": v_skill_dir, "path_exist": v_path_exist, "scripts_dir": v_scripts_dir,
     "env_key": v_env_key, "viking_uri": v_viking_uri, "fact_id": v_fact_id,
     "rule_doc": v_rule_doc, "cron_id": v_cron_id, "mem_key": v_mem_key,
+    "store_ref": v_store_ref,
 }
 
 
@@ -382,6 +440,7 @@ def run(dry=False, verbose=False):
 
     red = []       # 人工决策级
     yellow = []    # 自动修复级 / 黄级提示
+    pending_detail = []   # ? 待确认（未配置/外部服务不可用/超时）——verbose 时打印原因
     modified = False   # 是否真的产生了自动修复（决定是否写回）
     ok_count = 0
     pending_count = 0
@@ -402,6 +461,7 @@ def run(dry=False, verbose=False):
         exists, detail = VERIFIERS[vname](target)
         if exists is None:
             pending_count += 1
+            pending_detail.append((line, key, detail))
             continue
         if exists:
             ok_count += 1
@@ -429,6 +489,7 @@ def run(dry=False, verbose=False):
         report_policy = srule.get("report", "red")
         if report_policy == "pending":
             pending_count += 1
+            pending_detail.append((line, key, detail))
         else:
             red.append((line, key, f"断链: {scheme}://{target}（{detail}）"))
 
@@ -468,6 +529,11 @@ def run(dry=False, verbose=False):
         for line, k, msg in yellow:
             parts.append(f"  L{line} {k}: {msg}")
     parts.append(f"✅ 正常 {ok_count} | ? 待全量版 {pending_count} | 指针总数 {len(pointers)}")
+    # ? 条目的原因默认不打印（外部服务抖动不该每天吵），--verbose 才展开
+    if verbose and pending_detail:
+        parts.append(f"? 待确认 {len(pending_detail)} 条:")
+        for line, k, msg in pending_detail:
+            parts.append(f"  {'L' + str(line) if line else ''} {k}: {msg}")
     report = "\n".join(parts)
 
     # 落报告文件（始终记录，可回溯）
@@ -499,6 +565,17 @@ USAGE = """mem_guard v2 — 记忆指针保卫系统（声明式规则表 + 四�
   python mem_guard.py --check     # 只体检不写回（dry-run）
   python mem_guard.py --verbose   # 全正常也打印报告（人工自查用）
   python mem_guard.py --help      # 本帮助
+
+指针 scheme（11 种，清单与验证器全部由 mem_rules.json 声明）:
+  skill   skills/**/name/SKILL.md 存在          doc     路径存在
+  script  scripts/ 下脚本存在                   cfg/env .env 或 config.yaml 有该 key
+  viking  Viking 记忆 URI（留全量版）           fact    事实库 id（留全量版）
+  rule    规则文档（留全量版）                  cron    $HERMES_HOME/cron/jobs.json 有该任务
+  mem     同文件内另一个指针的 key 存在
+  store   外部记忆服务里的对象（只对接不 vendor）：
+          规则表 store.command 为空 = 未配置 → 记 ? 不报断链；
+          退出码按 store.exit_map 解释：0=命中 64=未找到(🔴断链) 65=服务不可用(记 ?)；
+          详见 docs/store-interop.md
 
 环境变量（默认值跨平台，不含个人路径）:
   HERMES_HOME       记忆库根目录，默认 ~/.hermes
