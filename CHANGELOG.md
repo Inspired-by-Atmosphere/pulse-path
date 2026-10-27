@@ -2,6 +2,19 @@
 
 All notable changes to this repository. Format loosely follows Keep a Changelog.
 
+## [0.3.1] - 2026-10-27 — fewer false positives in the link scan
+
+### Fixed
+- `scan_links.py` reported prose examples as dangling paths. On a 743-skill library it produced 67
+  "broken path" hits, of which most were illustrative text: a bare drive letter, a drive letter plus
+  a generic folder and file name, a drive letter plus a single-letter name with a file extension, and
+  fragments cut out of code or JSON strings (a fake drive letter followed by an escaped newline and a
+  printf placeholder). Path references are now filtered by three cheap rules — a path containing CJK
+  characters is prose, a path whose segment is a generic name (`dir`/`file`/`path`/`x`/`foo`/`example`…)
+  is a placeholder, and anything containing escapes (`\n`, `%s`, `${`, `\uXXXX`) is a code fragment —
+  plus a trailing full-width paren is stripped from the capture. Same run: **67 → 14 hits**, and the
+  remaining 14 are the ones a human should actually look at (paths that moved).
+
 ## [0.3.0] - 2026-10-27 — local retrieval (FTS5) and "borrow, don't vendor" interop
 
 Both items exist because the project had no retrieval at all: pointers were verified but the *choice*

@@ -70,6 +70,12 @@ TEXT_EXTS = (".md", ".py", ".txt", ".yaml", ".yml")
 PATH_RE = re.compile(r"(?<![A-Za-z0-9_\\])([A-Za-z]:[\\/][^`\"'()<>|*?\n\r]+)")
 
 PLACEHOLDER_MARKERS = ("(", "${", "…", "...", "xxx", "your", "path/to", "example")
+
+# 散文里的"示例路径"不是引用：C:\dir\file、D:\X、F:/x.iso、C:\path\x.ps1 这类
+# 教科书/事故叙述里的占位，按路径深度+通用片段名识别，避免把说明文字报成断链。
+GENERIC_SEGMENTS = {"dir", "file", "path", "x", "y", "z", "foo", "bar",
+                    "example", "examples", "sample", "placeholder", "somepath"}
+CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 SKILL_REF_RE = re.compile(r"(?:skill_view\(\s*name\s*=\s*['\"]([^'\"]+)['\"]|`([^`]+)`\s*技能|「([^」]+)」\s*技能)")
 FACT_REF_RE = re.compile(r"fact\s*#\s*(\d+)")
 
@@ -132,8 +138,24 @@ def path_exists_fuzzy(ref):
     return False
 
 
+def _is_placeholder_path(ref):
+    """判断是不是散文里的示例路径（不当引用）。"""
+    if CJK_RE.search(ref):          # 路径里夹中文＝在讲事情，不是引用
+        return True
+    if re.search(r"\\n|\\t|%s|%d|\$\{|\\u[0-9a-fA-F]{4}", ref):
+        return True             # 从代码/JSON 字符串里截出来的碎片，不是路径
+    parts = [p for p in re.split(r"[\\/]+", ref) if p]
+    if len(parts) <= 1:             # 只有盘符（C:/ 这类）
+        return True
+    for p in parts[1:]:             # 跳过盘符本身，看路径片段
+        stem = os.path.splitext(p)[0].lower()   # x.iso → x
+        if p.lower() in GENERIC_SEGMENTS or stem in GENERIC_SEGMENTS:
+            return True
+    return False
+
+
 def scan_paths(root_dir):
-    """路径悬空检查（跳过代码块与占位符）。返回 [(file, ref), ...]"""
+    """路径悬空检查（跳过代码块、占位符与散文示例路径）。返回 [(file, ref), ...]"""
     dangling = []
     for path in iter_text_files(root_dir):
         try:
@@ -142,10 +164,12 @@ def scan_paths(root_dir):
             continue
         txt = strip_code_blocks(txt)
         for m in PATH_RE.finditer(txt):
-            ref = m.group(1).replace("\\", os.sep).rstrip(".,;:，。；：、")
+            ref = m.group(1).replace("\\", os.sep).rstrip(".,;:，。；：、）)")
             if ref.endswith(("\\", "/")):
                 continue
             if any(mk in ref for mk in PLACEHOLDER_MARKERS):
+                continue
+            if _is_placeholder_path(ref):
                 continue
             if not path_exists_fuzzy(ref):
                 dangling.append((path, m.group(1)))
