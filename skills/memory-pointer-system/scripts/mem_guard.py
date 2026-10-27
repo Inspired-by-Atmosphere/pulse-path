@@ -40,6 +40,7 @@ import sys
 #   MEM_GUARD_SCRIPTS 脚本库根（默认 $HERMES_HOME/scripts）
 #   MEM_GUARD_ENV     .env 文件（默认 $HERMES_HOME/.env）
 #   MEM_GUARD_CONFIG  config.yaml（默认 $HERMES_HOME/config.yaml）
+#   MEM_GUARD_CRON    cron 任务库（默认 $HERMES_HOME/cron/jobs.json）
 # 规则表里的相对路径按 HERMES_HOME 解析，${VAR} 会展开环境变量。
 # HERMES_HOME 无论传入相对还是绝对路径，都会被规范化为绝对路径——否则规则表里的
 # ${HERMES_HOME}/... 展开出相对路径后会被再拼接一次，水位检查就会指向不存在的文件。
@@ -77,6 +78,7 @@ POINTER_RE = re.compile(r"^([a-z_][a-z0-9_]*) = ([a-z]+)://(\S+?) \| (.+)$")
 MANGLED_RE = re.compile(r"^([a-z_][a-z0-9_]*) = (.+?) \| (.+)$")
 
 DEFAULT_RULES = {
+    "summary": {"max_len": 40, "severity": "red"},
     "schemes": {
         "skill": {"verify": "skill_dir", "autofix": ["case_fix", "unique_approx"], "report": "red_if_unfixable"},
         "doc": {"verify": "path_exist", "autofix": ["sep_fix"], "report": "red_if_unfixable"},
@@ -86,8 +88,8 @@ DEFAULT_RULES = {
         "viking": {"verify": "viking_uri", "autofix": [], "report": "pending"},
         "fact": {"verify": "fact_id", "autofix": [], "report": "pending"},
         "rule": {"verify": "rule_doc", "autofix": [], "report": "pending"},
-        "cron": {"verify": "cron_id", "autofix": [], "report": "pending"},
-        "mem": {"verify": "mem_key", "autofix": [], "report": "pending"},
+        "cron": {"verify": "cron_id", "autofix": [], "report": "red"},
+        "mem": {"verify": "mem_key", "autofix": [], "report": "red"},
     },
     "damage": {"detect": ["pointer_mangled", "dup_key"], "action": "red"},
     "content_scans": {},
@@ -190,12 +192,55 @@ def v_rule_doc(target):
     return None, "rule 验证留全量版"
 
 
+def cron_jobs_file():
+    """cron 任务库路径：MEM_GUARD_CRON 优先，否则 $HERMES_HOME/cron/jobs.json（调用时求值，便于测试换沙箱）。"""
+    return os.environ.get("MEM_GUARD_CRON") or os.path.join(HERMES_HOME, "cron", "jobs.json")
+
+
+def _iter_cron_jobs(data):
+    """从 jobs.json 里取出任务列表：兼容 list / {"jobs": [...]} / {id: {...}} 三种结构。"""
+    if isinstance(data, list):
+        return [x for x in data if isinstance(x, dict)]
+    if isinstance(data, dict):
+        for k in ("jobs", "entries", "items"):
+            if isinstance(data.get(k), list):
+                return [x for x in data[k] if isinstance(x, dict)]
+        return [v for v in data.values() if isinstance(v, dict)]
+    return []
+
+
 def v_cron_id(target):
-    return None, "cron 验证留全量版"
+    """cron://<job_id 或 job 名> → 在 $HERMES_HOME/cron/jobs.json 里存在。
+    库文件不存在 → 返回 None（? 待全量版，不误报断链）。"""
+    p = cron_jobs_file()
+    if not os.path.exists(p):
+        return None, f"cron 库不存在（{p}），待全量版"
+    try:
+        with io.open(p, "r", encoding="utf-8", errors="ignore") as f:
+            data = json.load(f)
+    except Exception as e:
+        return False, f"cron 库解析失败: {e}"
+    for job in _iter_cron_jobs(data):
+        if str(job.get("id", "")) == target or job.get("name") == target:
+            return True, f"cron 任务 {target} 存在"
+    return False, f"cron 任务不存在: {target}"
+
+
+# mem:// 是跨指针引用，需要知道“同文件内有哪些 key”——run() 解析后登记，引擎按名分派不变。
+_POINTER_KEYS = set()
+
+
+def set_pointer_keys(pointers):
+    """登记本次体检的 key 全集，供 mem:// 引用完整性校验。"""
+    global _POINTER_KEYS
+    _POINTER_KEYS = {p["key"] for p in pointers}
 
 
 def v_mem_key(target):
-    return None, "mem 验证留全量版"
+    """mem://<另一个指针的 key> → 同文件内存在该 key 的指针条目。"""
+    if target in _POINTER_KEYS:
+        return True, f"指针别名 {target} 存在"
+    return False, "未定义的指针别名"
 
 
 VERIFIERS = {
@@ -272,6 +317,24 @@ def load_rules():
         return json.loads(json.dumps(DEFAULT_RULES))
 
 
+def check_summaries(pointers, rules):
+    """摘要长度校验：上限与等级全部读规则表 summary 段（max_len / severity），引擎零硬编码阈值。
+    按 Unicode 字符数计（中文一个字符算 1，与 memory 工具口径一致）。
+    返回 [(severity, line, key, msg)]，空=全部未超长。"""
+    cfg = rules.get("summary") or {}
+    max_len = cfg.get("max_len")
+    if not max_len:
+        return []
+    severity = cfg.get("severity", "red")
+    out = []
+    for p in pointers:
+        n = len(p["summary"])
+        if n > max_len:
+            out.append((severity, p["line"], p["key"],
+                        f"摘要过长: {n} 字 > {max_len}（{p['key']}）"))
+    return out
+
+
 def check_watermark(rules):
     """水位检查：读 watermark.files（默认 MEMORY.md）使用率（按 Unicode 字符数，与 memory 工具口径一致）。
     超阈值文件生成整理清单（按 § 分段取首行摘要）。返回 [(name, msg)]，空=全部正常。
@@ -315,9 +378,11 @@ def run(dry=False, verbose=False):
     txt = io.open(MEMORY_FILE, "r", encoding="utf-8", errors="ignore").read()
     pointers, mangled, others = parse_pointers(txt)
     lines = txt.split("\n")
+    set_pointer_keys(pointers)   # mem:// 跨指针引用校验需要本次 key 全集
 
     red = []       # 人工决策级
-    yellow = []    # 自动修复级
+    yellow = []    # 自动修复级 / 黄级提示
+    modified = False   # 是否真的产生了自动修复（决定是否写回）
     ok_count = 0
     pending_count = 0
 
@@ -355,6 +420,7 @@ def run(dry=False, verbose=False):
                     lines[p["line"] - 1] = new_line
                 yellow.append((line, key, f"🔧 {reason}"))
                 fixed = True
+                modified = True
                 break
         if fixed:
             continue
@@ -378,12 +444,16 @@ def run(dry=False, verbose=False):
         else:
             seen[p["key"]] = p["line"]
 
+    # ── 摘要长度（规则表 summary.max_len / severity）──
+    for sev, line, key, msg in check_summaries(pointers, rules):
+        (yellow if sev == "yellow" else red).append((line, key, msg))
+
     # ── 水位 ──
     for _wname, wm_msg in check_watermark(rules):
         red.append((0, "watermark", wm_msg))
 
-    # 写回（仅非 dry 且有任何自动修复）
-    if not dry and yellow:
+    # 写回（仅非 dry 且真的发生自动修复）
+    if not dry and modified:
         io.open(MEMORY_FILE, "w", encoding="utf-8", newline="\n").write("\n".join(lines))
 
     # ── 报告 ──
@@ -438,6 +508,7 @@ USAGE = """mem_guard v2 — 记忆指针保卫系统（声明式规则表 + 四�
   MEM_GUARD_SCRIPTS 脚本库根，默认 $HERMES_HOME/scripts
   MEM_GUARD_ENV     .env，默认 $HERMES_HOME/.env
   MEM_GUARD_CONFIG  config.yaml，默认 $HERMES_HOME/config.yaml
+  MEM_GUARD_CRON    cron 任务库，默认 $HERMES_HOME/cron/jobs.json
 
 当前生效路径:
   MEMORY_FILE   = {memory}

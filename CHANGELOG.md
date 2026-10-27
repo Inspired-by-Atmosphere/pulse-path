@@ -2,6 +2,61 @@
 
 All notable changes to this repository. Format loosely follows Keep a Changelog.
 
+## [0.2.0] - 2026-10-27 — closing the doc-vs-code gap, CI, and two ported engines
+
+### Added
+- `scripts/run_checks.py` — one offline entry point running every check (unit tests, secret scan,
+  link integrity, each engine's `--selftest`, MCP protocol test). CI runs exactly this command.
+- `.github/workflows/ci.yml` — 4-leg matrix (ubuntu/windows × Python 3.10/3.13), `fail-fast: false`,
+  plus a step that asserts the interpreter really matches the matrix value, and quickstart runs from
+  a foreign working directory on each OS.
+- `examples/quickstart.sh` / `examples/quickstart.bat` — the 60-second demo, safe from any cwd
+  (locates the repo root from `$0` / `%~dp0..`, builds a temp sandbox, cleans up, prints
+  `QUICKSTART OK`).
+- `skills/pulse-path/scripts/scan_link_graph.py` — link **graph** rather than link list: nodes, wikilinks,
+  relative links, path refs, ghosts, orphans, in-degree hubs and a backlink index; `--json`, `--selftest` (27).
+- `skills/memory-pointer-system/scripts/scan_archived_deps.py` — which archived skills are still
+  referenced by live files, reported as `path:line`; `--selftest` (20).
+- `skills/memory-pointer-system/scripts/stress_pointer_test.py` — weak-model lower-bound probe: stuff the
+  context with noise, hide the pointer mid-noise, ask a question the summary cannot answer, grade by
+  expected keywords. `--plan` renders the payload without network; `--selftest` (37) uses a local mock endpoint.
+- `skills/memory-governance/scripts/ssot_check.py` — SSOT drift reconciliation: retired figures/phrasings
+  that still linger in the live carriers, with legal-context exemption, 🔴/🟡/📌 grading and
+  `--emit-workorders`; `--selftest` (26).
+- `skills/memory-pointer-system/scripts/project_registry.py` — register a project plus its one-line head
+  pointer; dry-run by default, `--commit` backs up first, verifies by reading back, rolls back on failure;
+  `--selftest` (34).
+- `mcp_server/` — zero-dependency stdio JSON-RPC MCP server exposing `pp_guard_check`, `pp_scan_links`,
+  `pp_l2_coverage`, `pp_secrets_scan`; newline-delimited frames (LSP `Content-Length` accepted on input);
+  `test_mcp.py` (62 assertions) and a registration README for Claude Desktop / Claude Code.
+- `docs/RESULTS.md` — measured numbers (assertion counts, self-scan results, wall-clock) and method.
+- `examples/facts_ssot.sample.json` — a filled SSOT rule table.
+- `.gitattributes`: `*.bat text eol=crlf` so the batch file keeps the line endings `cmd.exe` expects.
+
+### Fixed
+- **`mem_guard.py` now actually enforces the summary length limit it documented.** `SKILL.md` claimed
+  “summary ≤ 40 chars, over-long ones are reported” in two places while the engine had no such check
+  and the unit suite had no assertion for it. The limit is declarative (`summary.max_len`,
+  `summary.severity` in `mem_rules.json`), counted in characters, and covered by tests (40 ok / 41 red,
+  mixed CJK+ASCII, table-driven limit and severity).
+- **`cron://` and `mem://` are verified instead of “pending”.** `cron://<id|name>` resolves against
+  `$HERMES_HOME/cron/jobs.json` (`MEM_GUARD_CRON` override; a missing store returns `?` rather than a
+  false dangling link), and `mem://<key>` checks that the referenced pointer key exists in the same
+  file. `schemes` is now 10, all verifier names registered declaratively.
+- `README.md` / `README.zh-CN.md` referenced a planning document that is not part of the published
+  tree — the reference is gone (a dangling reference, in the docs about dangling references).
+- `README*` quickstart no longer depends on being run from the repository root; the shortcut scripts
+  make that explicit.
+
+### Changed
+- `mem_guard.py`: pointer write-back now happens only when an autofix actually changed something, so a
+  yellow-level notice no longer rewrites the file.
+- `README.md` / `README.zh-CN.md`: added an “Engines at a glance” table, a “Results (measured)”
+  section, the new environment variables, and limitations that state plainly what this repo does
+  **not** do (no retrieval, no vector store; probe needs a model; MCP server is a thin wrapper).
+- `CHANGELOG` version stays pre-1.0: the methodology is stable, the engines are reference
+  implementations.
+
 ## [0.1.0] - 2026-09-28 — first public release (sanitized superset revision)
 
 ### Added
@@ -10,7 +65,8 @@ All notable changes to this repository. Format loosely follows Keep a Changelog.
 - `scripts/check_secrets.py` — zero-dependency pre-publish scanner (credentials, private keys,
   emails, private IPs/MACs, high-entropy strings, local absolute paths).
 - `docs/SANITIZE_LOG.md` — category-level record of every de-identification action.
-- `docs/DIFF_PLAN.md` — file-by-file plan of this revision vs. the previous public revision.
+- A file-by-file plan of this revision against the previous public one — **kept out of the published
+  tree on purpose** (it names internal decisions); the shipped result is this changelog plus the code.
 - `examples/MEMORY.sample.md` — runnable pointer-dictionary fixture.
 - `examples/mem_rules.sample.json` — rule-table starting point.
 - **New skill `memory-governance/`** with four references: `consolidation-engine.md`,
@@ -67,4 +123,6 @@ All notable changes to this repository. Format loosely follows Keep a Changelog.
   real command output, so the first thing a visitor sees is what the guard actually catches.
 
 ### Notes
-- Gate results (S1–S5) and the exact commands are recorded in `docs/DIFF_PLAN.md` §5.
+- Gate results (S1–S5) and the exact commands are recorded in the maintainer's internal working notes,
+  which are deliberately not part of this repository (referencing them here would create exactly the
+  dangling pointer this project exists to prevent).

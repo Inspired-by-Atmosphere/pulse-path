@@ -108,4 +108,5 @@ delegate_task 派 2-3 个子代理模拟"全新会话开局"（子代理=全新�
 ## 支持文件
 
 - `scripts/scan_links.py`：扫描目录内文档/脚本中的路径与技能名引用，报告悬空（不存在）引用——链表完整性自动化体检（`--help` 看环境变量与用法）
+- `scripts/scan_link_graph.py`：把断链检测升级为**链图**——节点/链接/幽灵/孤立/枢纽/反向索引（`--json` 出结构，`--selftest` 离线自测）
 - `references/classification_rules.md`：信息类型 → 唯一载体 归属表（根治重复的分类法则）

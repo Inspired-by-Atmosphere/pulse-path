@@ -1,0 +1,68 @@
+{
+  "_readme": [
+    "facts_ssot 段填好的示例：把下面 scan_roots / rules / legal_context / status_words",
+    "整段覆盖到 mem_rules.json 的 facts_ssot 里（仓库版是空占位），再跑 python ssot_check.py。",
+    "JSON 不支持注释，所以说明都放在本文件的 _readme/_field_notes 里，拷贝时把这两个键去掉即可。",
+    "原则：一处权威源（ssot），其余载体只引用不复述；forbid 写'已经不该出现的旧说法/旧值'。"
+  ],
+  "_field_notes": {
+    "scan_roots": "被检载体。文件或目录都可；目录按 .md/.py/.json/.yaml/.txt 等扩展名递归，.git/node_modules 默认跳过。支持 ~ 与 $VAR，相对路径按 HERMES_HOME 解析。",
+    "rules[].name": "口径名，人读用（报告里分组显示）。",
+    "rules[].forbid": "禁用语/旧值。命中且该行没有任何合法语境词 → 🔴 明确错误。纯 ASCII 词加词边界匹配（'8080' 不会被 '18080' 截胡误报）。",
+    "rules[].expect": "期望值，仅作参考列出（引擎不猜'该改成什么'，改由人/agent 照 ssot 决定）。",
+    "rules[].ssot": "权威源：这个口径以哪份文件/哪条记录为准。修的时候先看它，别照旧副本改。",
+    "legal_context": "合法语境词。行里出现任一即豁免——'旧端口 8080 已弃用'属于正当引用，不该报成漂移。",
+    "status_words": "状态词。命中的行进 🟡 复核清单（不判错），用于抓'待批/进行中'挂了很久没人推的事。"
+  },
+  "scan_roots": [
+    "${HERMES_HOME}/memories/MEMORY.md",
+    "${HERMES_HOME}/memories/USER.md",
+    "${HERMES_HOME}/skills",
+    "./docs"
+  ],
+  "rules": [
+    {
+      "name": "对外产品名",
+      "forbid": ["旧产品名", "OldProductName"],
+      "expect": "新产品名",
+      "ssot": "docs/产品定位.md（第 1 节 命名）"
+    },
+    {
+      "name": "服务端口",
+      "forbid": ["8080"],
+      "expect": "18080",
+      "ssot": "config.yaml 的 server.port"
+    },
+    {
+      "name": "主力模型",
+      "forbid": ["gpt-3.5-turbo"],
+      "expect": "当前主力模型（见 ssot）",
+      "ssot": "config.yaml 的 model 段"
+    },
+    {
+      "name": "仓库主分支",
+      "forbid": ["master"],
+      "expect": "main",
+      "ssot": "远端默认分支（git remote show origin）"
+    }
+  ],
+  "legal_context": [
+    "弃用",
+    "已弃用",
+    "已废",
+    "旧口径",
+    "历史",
+    "教训",
+    "禁用",
+    "不再使用",
+    "勿再",
+    "禁止"
+  ],
+  "status_words": [
+    "待批",
+    "进行中",
+    "未commit",
+    "待确认",
+    "待定"
+  ]
+}

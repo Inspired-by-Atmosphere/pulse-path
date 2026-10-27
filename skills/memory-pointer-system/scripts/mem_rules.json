@@ -1,6 +1,11 @@
 {
   "version": "1.0",
   "_comment": "mem_guard 声明式规则表——新增 scheme/检测类型只改本文件，引擎零改动。规则字段：verify=验证器名(引擎内置)，autofix=自动修复器名列表(按序尝试)，report=分级策略(red_if_unfixable=可修则黄/不可修则红，red=直接红，pending=全量版验证暂不检)",
+  "summary": {
+    "_comment": "指针摘要长度上限（安全网规范）：max_len=最大字符数（按 Unicode 字符计，中文一字算 1；与 memory 工具口径一致），severity=超长时的报告等级（red=🔴人工决策 / yellow=🟡仅记报告）。调上限只改这里，引擎零改动。",
+    "max_len": 40,
+    "severity": "red"
+  },
   "schemes": {
     "skill": {
       "verify": "skill_dir",
@@ -50,12 +55,12 @@
     "cron": {
       "verify": "cron_id",
       "autofix": [],
-      "report": "pending"
+      "report": "red"
     },
     "mem": {
       "verify": "mem_key",
       "autofix": [],
-      "report": "pending"
+      "report": "red"
     }
   },
   "damage": {
@@ -110,6 +115,34 @@
     "project_prefixes": [],
     "dup_prefix": 20,
     "retention_days": 30
+  },
+  "facts_ssot": {
+    "_comment": "口径对账（SSOT）声明式配置，ssot_check.py 专用：scan_roots=被检载体清单（文件或目录，支持 ~ 与 $VAR，相对路径按 HERMES_HOME 解析；目录按扩展名递归，.git/node_modules 等默认跳过）；rules[].name=口径名（人读）；rules[].forbid=禁用语/旧值（命中且行内无任何合法语境词 → 🔴 明确错误，修法 fix_forbid）；rules[].expect=期望值（仅作参考列出，不参与判定）；rules[].ssot=权威源（该口径以哪份文件/哪条记录为准，写给人看）；legal_context=合法语境词（行内含任一即豁免，专门放过\"旧端口 8080 已弃用\"这类正当引用）；status_words=状态词（命中行记 🟡 复核，防\"待批/进行中\"挂太久没人管）。开源版留空、不扫任何文件；填好的示例见 examples/facts_ssot.sample.json。",
+    "scan_roots": [],
+    "rules": [],
+    "legal_context": [
+      "弃用",
+      "已弃用",
+      "已废",
+      "旧口径",
+      "历史",
+      "教训",
+      "禁用",
+      "不再使用",
+      "勿再",
+      "禁止"
+    ],
+    "status_words": [
+      "待批",
+      "进行中",
+      "未commit",
+      "待确认",
+      "待定"
+    ]
+  },
+  "projects": {
+    "_comment": "项目注册表，project_registry.py 专用：add 子命令往 list 追加条目（默认 dry-run，--commit 才落盘，落盘前先备份 *.bak.<时间戳>）。字段 slug=短标识（小写字母/数字/-/_，唯一）、name=项目名、path=项目根目录、summary=一句话（同时作为 L1 头指针摘要，超长按上面 summary.max_len 截断）、status=active|archived、created=登记时间、key=L1 头指针键名（符合 mem_guard 指针语法 ^[a-z_][a-z0-9_]*$）、head_added=头指针是否已插入记忆文件。开源版不含任何真实项目。",
+    "list": []
   },
   "curation": {
     "_comment": "记忆管理员 curator 声明式配置：ticket 队列 + 质量门 + 分类复用 classification_rules",

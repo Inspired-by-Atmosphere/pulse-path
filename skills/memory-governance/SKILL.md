@@ -114,6 +114,7 @@ L1 路由层（指针）──出链──> L2 结构体层（语义库实体/�
 
 ## 支持文件
 
+- `scripts/ssot_check.py`：**口径对账**——扫活载体里残留的作废数字/说法（禁用语命中且行内无合法语境=🔴 明确错误，可 `--emit-workorders` 出修法工作单；状态词=🟡 复核；期望值=📌 参考）。规则全在 `mem_rules.json` 的 `facts_ssot` 段，引擎零硬编码
 - `references/consolidation-engine.md`：整理员/审计员引擎设计细节 + 退出码语义 + 声明式规则表模式
 - `references/curator-ticket-pipeline.md`：记忆管理员写入治理管线（ticket 队列/质量门三道/高危动作策略/auditor 链路核对/业界调研要点）
 - `references/memory-chain-diagnosis.md`：**记忆链健康体检 / "变笨·习惯消失"排查法**（五查法 + 根因实录）

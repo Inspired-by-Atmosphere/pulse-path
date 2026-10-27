@@ -44,6 +44,7 @@ Scope: `README.md`, `skills/**` (docs, references, engines), `.gitattributes`, e
 ## 未处理 / 待决策
 
 - 语义库（OpenViking 式）相关表述保留为可选集成，默认路径 `~/.openviking/...` 是**第三方工具的
-  公开默认目录**，不含个人信息；如需彻底去除，见 `docs/DIFF_PLAN.md` 的待决策项。
+  公开默认目录**，不含个人信息；如需彻底去除，见维护者的内部留档（**未随仓库发布**，故意不在此
+  引用其路径——否则就是本项目专门要抓的那类悬空指针）。
 - `scripts/check_secrets.py` 自身的正则里含 `password` / `token` / `Users` 等**词形**（不含任何真实值）。
-  敏感字反查（门禁 S5）需把该文件列入白名单，理由见 `docs/DIFF_PLAN.md` §5。
+  敏感字反查（门禁 S5）需把该文件列入白名单，理由见维护者内部留档（未随仓库发布）。

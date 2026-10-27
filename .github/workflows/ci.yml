@@ -1,0 +1,89 @@
+name: CI
+
+# Cross-platform self-check matrix.
+# One entry point only: `python scripts/run_checks.py` runs every offline check
+# in the repository (unit tests, `check_secrets.py .`, link integrity, the
+# `--selftest` fixtures and the MCP protocol test) and exits non-zero on the
+# first failure. Keeping CI and local runs on the same command means a green
+# local run predicts a green CI run.
+#
+# No dependency install step on purpose: the project is standard-library only.
+
+on:
+  push:
+    branches:
+      - "**"
+  pull_request:
+  workflow_dispatch:
+
+# A new push to the same branch cancels the previous, still-running matrix.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: checks (${{ matrix.os_name }}, ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    # The check scripts report in UTF-8 (Chinese); the Windows runner's default
+    # pipe encoding is NOT UTF-8, so pin stdout/stderr for every step.
+    env:
+      PYTHONIOENCODING: utf-8
+    strategy:
+      # One failing leg must not abort the others: a Windows-only or
+      # 3.13-only break is exactly what this matrix is here to surface.
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            os_name: ubuntu
+            python-version: "3.10"
+          - os: ubuntu-latest
+            os_name: ubuntu
+            python-version: "3.13"
+          - os: windows-latest
+            os_name: windows
+            python-version: "3.10"
+          - os: windows-latest
+            os_name: windows
+            python-version: "3.13"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Show interpreter
+        run: python -VV
+
+      # Guards against setup-python silently resolving a different version than
+      # the matrix asked for — this is what makes "4 legs really ran" checkable.
+      - name: Assert interpreter matches the matrix
+        run: python -c "import sys; want = '${{ matrix.python-version }}'; got = '%d.%d' % sys.version_info[:2]; print('matrix wants', want, '| running', got); sys.exit(0 if want == got else 1)"
+
+      # Runs everything, including the leak gate (`check_secrets.py .` — personal
+      # absolute paths, credentials, private IPs), which is why there is no
+      # separate "no secrets / no personal paths" step: it would scan twice.
+      - name: Run all checks
+        run: python scripts/run_checks.py
+
+      # The 60-second demo must also work from outside the repository root, so
+      # the scripts' own root resolution gets exercised on both platforms.
+      - name: Quickstart from a foreign working directory (bash)
+        if: runner.os == 'Linux'
+        working-directory: ${{ runner.temp }}
+        run: bash "${{ github.workspace }}/examples/quickstart.sh"
+
+      - name: Quickstart from a foreign working directory (cmd)
+        if: runner.os == 'Windows'
+        working-directory: ${{ runner.temp }}
+        shell: cmd
+        run: call "${{ github.workspace }}\examples\quickstart.bat"
